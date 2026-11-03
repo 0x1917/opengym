@@ -1,0 +1,16 @@
+#!/bin/sh
+# The openGym API: the only process that touches /data. s6-setuidgid drops
+# pid-1's privileges before exec, so node runs as opengym (uid 99).
+#
+# There is deliberately no root path here. Upstream's Coach can only run its
+# runtime-backed providers (the Claude Agent SDK and the Codex CLI) from a root
+# server because it drops each job to the `coach` user and setuid only goes
+# downward.
+#
+# Those runtimes are not in this image either, they live in upstream's
+# `coach` target and this image builds from `default`. An image that wants them
+# carries its own `run` file, so the privilege decision sits where the runtime
+# actually is. Coach over HTTPS (Anthropic, OpenAI, Gemini, any OpenAI-compatible
+# endpoint) spawns nothing and needs no root, so it works here unchanged.
+cd /app || exit 1
+exec s6-setuidgid opengym node server.js

@@ -1,0 +1,19 @@
+# Issue chooser. These two forms cover this repository's job: the image and its
+# supervision layer. Two other trackers exist for reports that do not belong
+# here, and the links below route those before they land in this one.
+
+blank_issues_enabled: true
+
+contact_links:
+  - name: Unraid template issue (templates repository)
+    url: https://github.com/0x1917/unraid-templates/issues
+    about: The template, its fields, its defaults, and the artwork are maintained in the templates repository, not here.
+  - name: App bug or app feature (upstream)
+    url: https://github.com/DuarteSantos8/openGym/issues
+    about: Workouts, accounts, passkeys, and anything inside openGym itself belong to the upstream project.
+  - name: Upstream self-hosting guide
+    url: https://github.com/DuarteSantos8/openGym/blob/main/docs/SELF_HOSTING.md
+    about: Configuration and deployment reference maintained by the upstream project.
+  - name: Image tags on Docker Hub
+    url: https://hub.docker.com/r/0x1917/opengym/tags
+    about: Every published version, and what :latest points at.

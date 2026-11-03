@@ -1,0 +1,75 @@
+# Static checks that need no image: workflow schema (actionlint, which also
+# lints the shell inside `run:` blocks), the shell scripts that ship inside the
+# container (shellcheck), and the crash policy's own test.
+#
+# One job, one check context (`lint`), three independent verdicts: each check
+# runs to completion even when another fails and the final step reports all of
+# them before failing the job. That keeps the ruleset simple without hiding which
+# tool objected.
+
+name: lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned by tag, same version as the local install. Embedded shellcheck
+      # stays ON: it reads the inline `run:` scripts, which the next step
+      # cannot see.
+      - name: actionlint
+        id: actionlint
+        continue-on-error: true
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12
+
+      - name: shellcheck
+        id: shellcheck
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          shellcheck --version >/dev/null || { echo "shellcheck not on the runner" >&2; exit 1; }
+          shellcheck -x -S warning      \
+            scripts/*.sh                \
+            runtime/*.sh                \
+            runtime/s6-api-run          \
+            runtime/s6-nginx-run
+
+      # The crash policy and the nginx run script are the image logic that can
+      # wedge a container, so they carry tests. Pure shell, no Docker, no root.
+      - name: runtime tests
+        id: policy
+        continue-on-error: true
+        run: bash scripts/test-runtime.sh
+
+      # Every check has already run by now. Fail the job (and the `lint` check)
+      # if any objected and say which.
+      - name: Verdict
+        if: always()
+        env:
+          ACTIONLINT: ${{ steps.actionlint.outcome }}
+          SHELLCHECK: ${{ steps.shellcheck.outcome }}
+          POLICY: ${{ steps.policy.outcome }}
+        run: |
+          set -uo pipefail
+          echo "actionlint: $ACTIONLINT"
+          echo "shellcheck: $SHELLCHECK"
+          echo "policy:     $POLICY"
+          rc=0
+          [ "$ACTIONLINT" = "success" ] || { echo "::error::actionlint failed"; rc=1; }
+          [ "$SHELLCHECK" = "success" ] || { echo "::error::shellcheck failed"; rc=1; }
+          [ "$POLICY" = "success" ] || { echo "::error::finish-policy test failed"; rc=1; }
+          exit "$rc"

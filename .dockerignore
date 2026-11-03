@@ -1,0 +1,7 @@
+# Keep this list in step with the Dockerfile's COPY lines.
+.git
+.github
+scripts
+README.md
+.gitignore
+.dockerignore
