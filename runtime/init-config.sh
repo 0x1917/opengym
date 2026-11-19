@@ -39,7 +39,7 @@ mkfifo -m 0666 /run/nginx/log.pipe
 # it here, where a deployer's explicit override still wins.
 CONTENT_SECURITY_POLICY=${CONTENT_SECURITY_POLICY:-$(cat /etc/opengym/content-security-policy)}
 export CONTENT_SECURITY_POLICY
-envsubst '${NGINX_PORT} ${BASE_PATH} ${BACKEND} ${PORT} ${RESOLVER} ${CF_CONNECTING_IP} ${MEDIA_UPLOAD_MAX} ${CONTENT_SECURITY_POLICY}' \
+envsubst '${NGINX_PORT} ${BASE_PATH} ${BACKEND} ${PORT} ${RESOLVER} ${CF_CONNECTING_IP} ${MEDIA_UPLOAD_MAX} ${MCP_BACKEND} ${MCP_PORT} ${CONTENT_SECURITY_POLICY}' \
   < /etc/nginx/templates/default.conf.template > /run/nginx/site.conf
 chown nginx:nginx /run/nginx/site.conf
 

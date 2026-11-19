@@ -233,7 +233,9 @@ Deploy-time variables, the same fields the Unraid template exposes:
 | `ADMIN_UIDS`       | *(empty)*     | Comma-separated account IDs (Settings > Account > Account ID) with admin dashboard access.                                                               |
 | `BASE_PATH`        | *(empty)*     | Subpath deployments (`/gym`, no trailing slash). Empty means site root.                                                                                  |
 | `CF_CONNECTING_IP` | *(empty)*     | `$http_cf_connecting_ip`, only when Cloudflare is really in front; empty drops the header.                                                               |
-| `MEDIA_UPLOAD_MAX` | `48m`         | Largest upload nginx accepts (`client_max_body_size`). Raise it for big media imports; suffix `k`, `m`, or `g`.                                          |
+| `MEDIA_UPLOAD_MAX` | `112m`        | Largest upload nginx accepts (`client_max_body_size`). Raise it for big media imports; suffix `k`, `m`, or `g`.                                          |
+| `MCP_BACKEND`      | `127.0.0.1`   | Host of an optional upstream MCP container for `/mcp`. None runs in this image, so `/mcp` answers 503 until this points at one.                          |
+| `MCP_PORT`         | `3100`        | Port of that MCP container.                                                                                                                              |
 | `TZ`               | `etc/UTC`     | Container timezone for logs and the audit log. Reminders fire in each user's own zone regardless.                                                        |
 
 ## First boot
