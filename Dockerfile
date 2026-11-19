@@ -179,6 +179,10 @@ RUN install -D -m 644 /tmp/opengym-runtime/nginx.conf         /etc/nginx/nginx.c
 # because the api lives in this same container, so no DNS name needs re-resolving.
 # RESOLVER: kept configurable for parity with upstream's template (the /api blocks
 # carry a `resolver` directive); on Docker the embedded DNS answers.
+# MCP_BACKEND/MCP_PORT: upstream's template (v1.4.5+) proxies /mcp to an optional
+# separate mcp container. None runs in this image, so the default points at an
+# unused local port and /mcp answers upstream's JSON 503; aim them at a real mcp
+# container to enable it.
 # PASSWORD_LOGIN and FIRST_USER_ADMIN are deliberately NOT defaulted here: both
 # are template rows (default true), so the choice belongs to the deployer's
 # config, not the image. A plain `docker run` without them gets upstream's off.
@@ -193,7 +197,9 @@ ENV NODE_ENV=production    \
     RESOLVER=127.0.0.11    \
     CF_CONNECTING_IP=      \
     BASE_PATH=             \
-    MEDIA_UPLOAD_MAX=48m   \
+    MEDIA_UPLOAD_MAX=112m  \
+    MCP_BACKEND=127.0.0.1  \
+    MCP_PORT=3100          \
     TZ=Etc/UTC
 
 # S6_BEHAVIOUR_IF_STAGE2_FAILS=2: a failed one-shot init (bad BASE_PATH, unwritable
