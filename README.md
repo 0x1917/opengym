@@ -123,14 +123,17 @@ bundle says so. It then:
 1. Loads the tarball and asserts the image ID matches the one in `meta.json`
 2. Runs `smoke-test.sh` again on the loaded bytes, because they travelled
    through an artifact store
-3. Tags and pushes `<ver>` and `latest`, verifies both digests match
+3. Tags and pushes its registry tag (`<ver>` on the first publish, `<ver>-<n>`
+   on a rebuild) plus `latest`, verifies both digests match
 4. Creates the git source tag (`v<ver>`, or `-<n>` for a rebuild)
 5. Creates the GitHub release, whose notes quote upstream's changelog section
    for that version word for word, and state the digest that shipped
 
 A rebuild moves that release onto the numbered source tag rather than opening a
 second release, so each version keeps one release whose tag names the bytes it
-was last cut from.
+was last cut from. On the registry the rebuild is a new tag of its own
+(`<ver>-<n>`): the first-published `<ver>` tag is never overwritten, and only
+`latest` moves to the newest bytes.
 
 Two manual paths:
 
@@ -145,7 +148,8 @@ gh workflow run publish.yml -f build_run_id=1234567890
 The first marks the bundle as publishable and lets the chained workflow push it. A
 dispatch without the input builds and smokes only. The second re-pushes the
 bytes from that build run - it no-ops the source tag if the commit already has one
-and it still refuses if the bundle was never marked as publishable.
+and re-pushes that commit's own registry tag, leaving every other tag alone. It
+still refuses if the bundle was never marked as publishable.
 
 What matters:
 
@@ -190,7 +194,7 @@ it, so one edit cannot leave the pair mismatched.
 | Thing                                 | Form                                            | Example                |
 | ------------------------------------- | ----------------------------------------------- | ---------------------- |
 | upstream image tag                    | bare semver (upstream's own convention)         | `opengym-api:<ver>`    |
-| this repo's Hub tag                   | bare semver, same as upstream                   | `0x1917/opengym:<ver>` |
+| this repo's Hub tag                   | bare semver first publish, `<ver>-<n>` rebuilds | `0x1917/opengym:<ver>` |
 | OCI `image.version` label             | bare semver                                     | `<ver>`                |
 | git tag (CI)                          | `v` + version; rebuilds get `-<n>`              | `v<ver>`               |
 
@@ -206,13 +210,14 @@ The daily check does steps 1 to 4 and opens a PR, merging that PR is step 5. By 
 
 ### Caveats
 
-- **A rebuild reuses the Hub tag.** `<ver>` is overwritten because Hub tags are
-  mutable. The git side records every build: the first publish of a release gets
-  `v<ver>`, and each rebuild gets `v<ver>-<n>`, numbered from the
-  remote's tags. Inside the registry, `image.created` and `image.revision` still
-  separate two builds of one release.
-- **Rollback** is a previous release tag (`0x1917/opengym:<ver>`) or a local
-  image. Old tags are not deleted.
+- **Version tags are immutable after the first publish.** The first publish of
+  a release claims `<ver>` on both registries; every rebuild pushes its own
+  `<ver>-<n>` tag and moves only `latest`. The git side records the same series
+  (`v<ver>`, then `v<ver>-<n>`), and the release for that core version is
+  retargeted to the newest source tag. Inside the registry, `image.created` and
+  `image.revision` still separate two builds of one release.
+- **Rollback** is a previous release tag (`0x1917/opengym:<ver>`, or a rebuild's
+  `<ver>-<n>`) or a local image. Old tags are not deleted.
 - **The media is not AGPL.** Upstream's notice permits a non-commercial OpenGym
   fork to carry the unmodified 180px media with the notice, which is why
   `NOTICE.md` ships inside the image and is re-vendored on every release update.
