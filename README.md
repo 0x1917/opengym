@@ -219,24 +219,121 @@ The daily check does steps 1 to 4 and opens a PR, merging that PR is step 5. By 
 
 ## Environment
 
-Deploy-time variables, the same fields the Unraid template exposes:
+Everything below is read from the container environment at boot; changing a
+value means recreating the container. Flags take `true`/`false` (`1`/`0`,
+`on`/`off` and `yes`/`no` work too). Upstream's
+[`.env.example`](https://github.com/DuarteSantos8/openGym/blob/main/.env.example)
+and [`docs/SELF_HOSTING.md`](https://github.com/DuarteSantos8/openGym/blob/main/docs/SELF_HOSTING.md)
+are the full reference; this is the subset that applies to this image.
 
-| Variable           | Default       | Meaning                                                                                                                                                  |
-| ------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ORIGIN`           | *(required)*  | Exact address users type, scheme included. A mismatch refuses sign-in with `origin-mismatch`.                                                            |
-| `RP_ID`            | *(empty)*     | Hostname from `ORIGIN`, no scheme or port. Required for passkeys; changing it invalidates them. Passkeys need HTTPS; on plain HTTP use `PASSWORD_LOGIN`. |
-| `PASSWORD_LOGIN`   | `true`        | Adds name and password sign-in (upstream default: off). Registration stays a passkey ceremony.                                                           |
-| `FIRST_USER_ADMIN` | `true`        | First profile on an empty instance becomes admin (upstream default: off).                                                                                |
-| `ALLOW_GUEST`      | `true`        | `false` removes "Continue without account".                                                                                                              |
-| `INVITE_ONLY`      | `false`       | `true` gates sign-ups behind an invite code. Create an admin profile first.                                                                              |
-| `TRUST_PROXY`      | `true`        | Honor `X-Forwarded-For` and `X-Real-IP`; set when a reverse proxy fronts the container.                                                                  |
-| `ADMIN_UIDS`       | *(empty)*     | Comma-separated account IDs (Settings > Account > Account ID) with admin dashboard access.                                                               |
-| `BASE_PATH`        | *(empty)*     | Subpath deployments (`/gym`, no trailing slash). Empty means site root.                                                                                  |
-| `CF_CONNECTING_IP` | *(empty)*     | `$http_cf_connecting_ip`, only when Cloudflare is really in front; empty drops the header.                                                               |
-| `MEDIA_UPLOAD_MAX` | `112m`        | Largest upload nginx accepts (`client_max_body_size`). Raise it for big media imports; suffix `k`, `m`, or `g`.                                          |
-| `MCP_BACKEND`      | `127.0.0.1`   | Host of an optional upstream MCP container for `/mcp`. None runs in this image, so `/mcp` answers 503 until this points at one.                          |
-| `MCP_PORT`         | `3100`        | Port of that MCP container.                                                                                                                              |
-| `TZ`               | `etc/UTC`     | Container timezone for logs and the audit log. Reminders fire in each user's own zone regardless.                                                        |
+Defaults are what this image (or, marked †, the Unraid template) sets. A plain
+`docker run` without a † variable gets upstream's default, given in the text.
+
+### Address and sign-in
+
+| Variable           | Default      | Meaning                                                                                                                                       |
+| ------------------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORIGIN`           | *(required)* | Exact address users type, scheme and port included. A mismatch refuses sign-in with `origin-mismatch`.                                        |
+| `RP_ID`            | *(empty)*    | Hostname from `ORIGIN`, no scheme or port. Required for passkeys; changing it invalidates them. Passkeys need HTTPS.                          |
+| `RP_NAME`          | `openGym`    | Name shown in the browser's passkey prompt.                                                                                                   |
+| `PASSWORD_LOGIN`   | `true` †     | Name and password sign-in next to passkeys, for plain-HTTP LAN installs and recovery (upstream default: off).                                 |
+| `FIRST_USER_ADMIN` | `true` †     | First profile on an empty instance becomes admin; also applies to the first OIDC sign-in (upstream default: off).                             |
+| `ADMIN_UIDS`       | *(empty)*    | Comma-separated account IDs (Settings > Account > Account ID) with admin dashboard access.                                                    |
+| `ALLOW_GUEST`      | `true`       | `false` removes "Continue without account".                                                                                                   |
+| `INVITE_ONLY`      | `false`      | Gate sign-ups behind admin-generated invite codes. Create an admin profile first.                                                             |
+| `SESSION_DAYS`     | `90`         | Sign-in lifetime in days. Affects new sign-ins only.                                                                                          |
+| `SESSION_SAMESITE` | *(lax)*      | `strict` never sends the session cookie on cross-site requests.                                                                               |
+| `DEFAULT_LANG`     | *(empty)*    | Starting language for the sign-in screen and profiles that never chose one (`de`, `pt-BR`, ...; codes as in Settings > Language).            |
+
+### Single sign-on (OIDC)
+
+Off until `OIDC_ISSUER` and `OIDC_CLIENT_ID` are both set. Register
+`<ORIGIN>/api/oidc/callback` as the redirect URI at the provider (Authentik,
+Authelia, Keycloak, Pocket ID, voidAuth, ...).
+
+| Variable              | Default                | Meaning                                                                                                              |
+| --------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `OIDC_ISSUER`         | *(empty)*              | Issuer URL, e.g. `https://auth.example.com/application/o/opengym/`.                                                  |
+| `OIDC_CLIENT_ID`      | *(empty)*              | Client ID registered at the provider.                                                                                |
+| `OIDC_CLIENT_SECRET`  | *(empty)*              | Client secret. Leave empty for a public client (PKCE only).                                                          |
+| `OIDC_LABEL`          | *(empty)*              | Button text: "Sign in with *label*".                                                                                 |
+| `OIDC_SCOPES`         | `openid profile email` | Scopes requested.                                                                                                    |
+| `OIDC_ALLOWED_GROUPS` | *(empty)*              | Comma-separated groups allowed in. **Empty lets anyone the provider authenticates create a profile.**                |
+| `OIDC_GROUPS_CLAIM`   | `groups`               | Claim holding the groups, or a path such as `realm_access.roles`.                                                    |
+| `OIDC_ROLE_MAP`       | *(empty)*              | Groups to roles, e.g. `access=opengym, admin=opengym-admins`.                                                        |
+| `OIDC_ONLY`           | `false`                | The provider becomes the only way in (admins keep their passkeys).                                                   |
+| `OIDC_EMAIL_LINKING`  | `false`                | Link a first provider sign-in to an existing profile by verified e-mail.                                             |
+| `OIDC_LOGOUT`         | `false`                | Signing out also ends the provider session.                                                                          |
+| `OIDC_TOKEN_AUTH`     | *(basic)*              | `post` sends the client secret in the body (`client_secret_post`).                                                   |
+| `OIDC_REDIRECT_URI`   | *(derived)*            | Only needed for a `BASE_PATH` install.                                                                               |
+
+### Proxy and networking
+
+| Variable           | Default     | Meaning                                                                                                                       |
+| ------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `TRUST_PROXY`      | `true` †    | Honor `X-Forwarded-For`/`X-Real-IP`. Safe here: nginx in this image overwrites both with the real peer (upstream default: off). |
+| `CF_CONNECTING_IP` | *(empty)*   | `$http_cf_connecting_ip`, only when Cloudflare is really in front; empty drops the header so a client cannot forge it.        |
+| `BASE_PATH`        | *(empty)*   | Subpath deployments (`/gym`, no trailing slash) where the proxy passes the prefix through. Empty means site root.             |
+| `NGINX_PORT`       | `80`        | nginx's listen port inside the container. Change the published port instead unless you have a reason.                        |
+| `TZ`               | `Etc/UTC`   | Container timezone for logs and the audit log. Reminders fire in each user's own zone regardless.                             |
+
+### Media uploads
+
+Photos, GIFs, videos and sounds attached to custom exercises, stored under
+`/data/uploads`. Sizes are MB (1024×1024 bytes).
+
+| Variable                 | Default   | Meaning                                                                                                               |
+| ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| `MEDIA_UPLOAD_MAX`       | `112m`    | nginx's body limit (`client_max_body_size`). Keep it above `MEDIA_VIDEO_MAX_MB`, and give any reverse proxy in front the same room. |
+| `MEDIA_UPLOADS`          | `true`    | `false` turns uploads off; the app then offers a link field only.                                                     |
+| `MEDIA_QUOTA_MB`         | `200`     | Space per profile (`0` = no cap). On open sign-up, the worst case is this times the number of profiles.               |
+| `MEDIA_VIDEO_MAX_MB`     | `100`     | Per-video cap. Larger clips are shrunk on the device first where the browser can.                                     |
+| `MEDIA_VIDEO_MAX_SEC`    | `60`      | Per-video length cap.                                                                                                 |
+| `MEDIA_IMAGE_MAX_MB`     | `2`       | Per-photo cap (photos are shrunk to 1600 px on the device).                                                           |
+| `MEDIA_GIF_MAX_MB`       | `8`       | Per-GIF cap.                                                                                                          |
+| `MEDIA_AUDIO_MAX_MB`     | `2`       | Per rest-timer sound cap.                                                                                             |
+| `MEDIA_MIN_FREE_MB`      | `512`     | Uploads are refused below this much free disk, so a full disk cannot take the instance down.                          |
+
+### Optional features
+
+All off unless noted.
+
+| Variable                 | Default   | Meaning                                                                                                                          |
+| ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `TRAINERS`               | `false`   | Gyms, gym leads and trainers; members choose per category what a trainer may see or change. See upstream `docs/TRAINERS.md`.     |
+| `TRAINERS_LEAD_ACCESS`   | `row`     | What a gym lead gets: `row`, `mirror` or `none`.                                                                                 |
+| `LIBRARY`                | `false`   | Community library: share exercises, plans, sounds and more with everyone on this server, moderated from the admin dashboard.     |
+| `SHARE_REVIEW`           | `false`   | An admin approves every new library item first.                                                                                  |
+| `SHARE_PERSONAL_MEDIA`   | `false`   | Allow workout and progress photos in the library (always reviewed).                                                              |
+| `ADMIN_DATA_VIEW`        | `false`   | Admin dashboard shows people's workouts and weigh-ins again (counts only since 1.4.5), with every look logged.                   |
+| `API_TOKENS`             | `true`    | Per-profile scoped API tokens (Settings > API tokens). `false` removes the feature.                                              |
+| `INTEGRATIONS`           | *(empty)* | Comma-separated: `webhook` (signed JSON to Home Assistant, n8n, ntfy, ...), `strava` (needs `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET`). |
+| `INTEGRATIONS_ALLOW_LAN` | `false`   | Let webhooks reach private addresses. Every signed-in user can then make the server call into your network.                      |
+| `NUTRITION_SOURCE`       | *(empty)* | `opennutrition`, with `NUTRITION_URL`, fills the trainer "nutrition" category.                                                   |
+| `VAPID_SUBJECT`          | `ORIGIN`  | Contact for push services, e.g. `mailto:you@example.com`. Push works without it.                                                 |
+
+### Activity log and AI Coach
+
+| Variable               | Default  | Meaning                                                                                                                  |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `AUDIT_LOG`            | `true`   | Admin-dashboard activity log in `/data/audit.log`.                                                                       |
+| `AUDIT_IP`             | `off`    | Record addresses: `off`, `net` (network only) or `full`.                                                                 |
+| `AUDIT_MAX`            | `5000`   | Events kept (`0` = no limit).                                                                                            |
+| `AUDIT_DAYS`           | `90`     | Days kept (`0` = no limit).                                                                                              |
+| `COACH_DISABLED`       | `false`  | Kill switch over the admin's AI Coach toggle. The Coach itself is set up in the admin dashboard, not here.               |
+| `COACH_JOB_TIMEOUT_MS` | `600000` | Longer Coach jobs, e.g. a local model on a CPU. Never below one minute.                                                  |
+
+### Not applicable to this image
+
+- `MCP` / `COMPOSE_PROFILES=mcp`: MCP over HTTPS needs upstream's separate mcp
+  container, which is not bundled. `/mcp` answers a JSON 503. To use one, run
+  it beside this container, point `MCP_BACKEND` (default `127.0.0.1`) and
+  `MCP_PORT` (`3100`) at it, and set `MCP=true`.
+- `COACH_EFFORT`, `API_TARGET=coach`: this image is upstream's `default` API
+  target, without the Claude Agent SDK or Codex runtime. API-key Coach
+  providers work; the in-container ones do not.
+- `DATA_DIR`, `PORT`, `BACKEND`: wiring between nginx and the API inside this
+  container. Map `/data` instead of moving it.
 
 ## First boot
 
