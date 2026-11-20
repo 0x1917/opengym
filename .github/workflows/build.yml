@@ -23,7 +23,7 @@ on:
   schedule:
     - cron: "0 5 * * 1"
   # Manual run. `force_publish=true` marks the build as publishable even though
-  # nothing changed: a dispatch run has no before-sha to diff. Without the input
+  # nothing changed: a dispatch run is never diffed. Without the input
   # it builds and smokes only, which is the safe default.
   workflow_dispatch:
     inputs:
@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The scope check below diffs github.event.before against HEAD.
+          # The scope check below diffs the last published tag against HEAD.
           fetch-depth: 0
 
       # A push that touches only the workflow must still RUN but it must not
@@ -71,11 +71,15 @@ jobs:
       # paths that never reach the image (the CI scripts, the artwork, this
       # README, and the workflow files), so a new file defaults to publishing
       # rather than silently skipping.
+      #
+      # The baseline is the highest source tag, i.e. what last shipped, not
+      # github.event.before: after a force-push that sha is orphaned and absent
+      # from the clone, and a push that only amends a README commit must not
+      # republish. A failed publish leaves no tag, so the next push retries it.
       - name: Determine if image was updated
         id: scope
         if: github.event_name != 'pull_request'
         env:
-          BEFORE: ${{ github.event.before }}
           EVENT: ${{ github.event_name }}
           FORCE: ${{ inputs.force_publish }}
         run: |
@@ -101,10 +105,11 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]       \
-             || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null            \
-             || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- .               \
+          LAST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' | sort -V | tail -1 || true)
+          if [ -z "$LAST" ]                                                    \
+             || ! git diff --quiet "$LAST" "$GITHUB_SHA" -- .                  \
                   ':(exclude)scripts' ':(exclude)assets' ':(exclude).github' ':(exclude)README.md'; then
+            echo "build inputs changed since ${LAST:-no release tag yet}, packaging for publish"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "no build input changed, so build and smoke run but nothing is published"
