@@ -15,7 +15,7 @@
 # image tags without a `v` (1.4.3, 1.4, latest, edge); the git release of the
 # same version is v1.4.3, which is what the links above use. Our own image tag
 # is the same bare release; only the git tag carries the `v`.
-ARG UPSTREAM_VERSION=1.4.4
+ARG UPSTREAM_VERSION=1.4.5
 
 # The two images this build starts from. One repository constant each and both
 # refs derive from UPSTREAM_VERSION on top of it: moving the release, or the
