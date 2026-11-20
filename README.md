@@ -132,8 +132,9 @@ bundle says so. It then:
 A rebuild moves that release onto the numbered source tag rather than opening a
 second release, so each version keeps one release whose tag names the bytes it
 was last cut from. On the registry the rebuild is a new tag of its own
-(`<ver>-<n>`): the first-published `<ver>` tag is never overwritten, and only
-`latest` moves to the newest bytes.
+(`<ver>-<n>`): the first-published `<ver>` tag is never overwritten, and
+`latest` moves only when the run carries the highest tag of the series, so a
+re-publish of an older build refreshes just its own tag.
 
 Two manual paths:
 
@@ -212,7 +213,9 @@ The daily check does steps 1 to 4 and opens a PR, merging that PR is step 5. By 
 
 - **Version tags are immutable after the first publish.** The first publish of
   a release claims `<ver>` on both registries; every rebuild pushes its own
-  `<ver>-<n>` tag and moves only `latest`. The git side records the same series
+  `<ver>-<n>` tag. `latest` moves only when the run carries the highest tag of
+  the whole series, so re-publishing an older build never drags it backwards.
+  The git side records the same series
   (`v<ver>`, then `v<ver>-<n>`), and the release for that core version is
   retargeted to the newest source tag. Inside the registry, `image.created` and
   `image.revision` still separate two builds of one release.

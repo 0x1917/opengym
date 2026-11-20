@@ -162,10 +162,11 @@ jobs:
       # The registry tag mirrors the git source tag, computed here from read-only
       # git state BEFORE anything is pushed: the first publish of a release keeps
       # the bare core version on the registry (1.4.4) for good, a rebuild gets
-      # its own numbered tag (1.4.4-1) instead of overwriting it. Only `latest`
-      # moves to the newest bytes. Publish runs are serialised by this
-      # workflow's concurrency group, so no other run can take a number between
-      # this step and the tag step below.
+      # its own numbered tag (1.4.4-1) instead of overwriting it. `latest` moves
+      # only when this run carries the highest tag of the whole series (gate
+      # below), so a re-publish of an older build never drags it backwards.
+      # Publish runs are serialised by this workflow's concurrency group, so no
+      # other run can take a number between this step and the tag step below.
       - name: Resolve the publish tag
         id: pubtag
         if: steps.meta.outputs.publish == 'true'
@@ -189,12 +190,26 @@ jobs:
             TAG="$BASE"
             NOTE="Source state published as $IMAGE:$VERSION (build run $RUN_ID)"
           fi
+          # `latest` moves only when this run carries the highest tag of the
+          # whole series. Peeled `^{}` lines and non-version tags cannot match
+          # the pattern; if nothing matches, default to pushing (first publish).
+          HIGHEST_ALL=$(git ls-remote --tags origin \
+            | awk '{sub(/^refs\/tags\//,"",$2); print $2}' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' \
+            | sort -V | tail -1 || true)
+          [ -n "$HIGHEST_ALL" ] || HIGHEST_ALL="$TAG"
+          if [ "$TAG" = "$HIGHEST_ALL" ]; then
+            PUSH_LATEST=true
+          else
+            PUSH_LATEST=false
+          fi
           {
             echo "tag=$TAG"
             echo "registry_tag=${TAG#v}"
             echo "note=$NOTE"
+            echo "push_latest=$PUSH_LATEST"
           } >> "$GITHUB_OUTPUT"
-          echo "publish tag: $TAG (registry tag: ${TAG#v})"
+          echo "publish tag: $TAG (registry tag: ${TAG#v}, push_latest=$PUSH_LATEST)"
 
       - name: Log in to Docker Hub
         if: steps.meta.outputs.publish == 'true'
@@ -204,29 +219,39 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # The version tag is immutable after its first publish: a rebuild pushes
-      # its own numbered tag and leaves the earlier one alone. Only `latest`
-      # moves to the newest bytes.
+      # its own numbered tag and leaves the earlier one alone. `latest` moves
+      # only when Resolve the publish tag set push_latest=true.
       - name: Tag and push the image
         if: steps.meta.outputs.publish == 'true'
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
+          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
         run: |
           docker tag opengym:test "$IMAGE:$REGISTRY_TAG"
-          docker tag opengym:test "$IMAGE:latest"
           docker push "$IMAGE:$REGISTRY_TAG"
-          docker push "$IMAGE:latest"
+          if [ "$PUSH_LATEST" = "true" ]; then
+            docker tag opengym:test "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          else
+            echo "not the highest tag of the series, so latest is left alone"
+          fi
 
-      - name: Verify both tags carry the same digest
+      - name: Verify the pushed digest
         id: digests
         if: steps.meta.outputs.publish == 'true'
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
+          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
         run: |
           v=$(docker buildx imagetools inspect "$IMAGE:$REGISTRY_TAG" --format '{{.Manifest.Digest}}')
-          l=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')
           echo "version: $v"
-          echo "latest:  $l"
-          [ "$v" = "$l" ]
+          if [ "$PUSH_LATEST" = "true" ]; then
+            l=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')
+            echo "latest:  $l"
+            [ "$v" = "$l" ]
+          else
+            echo "latest:  not moved by this run"
+          fi
           echo "digest=$v" >> "$GITHUB_OUTPUT"
 
       # The FIRST publish of a release gets the bare tag (v1.4.3); a rebuild of
@@ -279,33 +304,43 @@ jobs:
         continue-on-error: true
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
+          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
         run: |
           set -euo pipefail
           docker tag opengym:test "$GHCR:$REGISTRY_TAG"
-          docker tag opengym:test "$GHCR:latest"
           docker push "$GHCR:$REGISTRY_TAG"
-          docker push "$GHCR:latest"
+          if [ "$PUSH_LATEST" = "true" ]; then
+            docker tag opengym:test "$GHCR:latest"
+            docker push "$GHCR:latest"
+          else
+            echo "not the highest tag of the series, so ghcr latest is left alone"
+          fi
 
       # Both registries store the same manifest bytes, so the digest is the
       # same content-addressed value on each: compare the GHCR copy against the
-      # Hub tag too, not only against its own `latest`. A mismatch means the
-      # mirror is not carrying the published image.
+      # Hub tag too. A mismatch means the mirror is not carrying the published
+      # image. The `latest` pair is compared only when this run moved it.
       - name: Verify the GHCR tags
         id: ghcr_verify
         if: steps.meta.outputs.publish == 'true'
         continue-on-error: true
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
+          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
         run: |
           set -euo pipefail
           v=$(docker buildx imagetools inspect "$GHCR:$REGISTRY_TAG" --format '{{.Manifest.Digest}}')
-          l=$(docker buildx imagetools inspect "$GHCR:latest" --format '{{.Manifest.Digest}}')
           h=$(docker buildx imagetools inspect "$IMAGE:$REGISTRY_TAG" --format '{{.Manifest.Digest}}')
           echo "ghcr version: $v"
-          echo "ghcr latest:  $l"
           echo "hub  version: $h"
-          [ "$v" = "$l" ]
           [ "$v" = "$h" ]
+          if [ "$PUSH_LATEST" = "true" ]; then
+            l=$(docker buildx imagetools inspect "$GHCR:latest" --format '{{.Manifest.Digest}}')
+            echo "ghcr latest:  $l"
+            [ "$v" = "$l" ]
+          else
+            echo "ghcr latest:  not moved by this run"
+          fi
 
       - name: GHCR outcome
         if: always() && steps.meta.outputs.publish == 'true'
@@ -331,6 +366,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
+          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
           TAG: ${{ steps.tag.outputs.tag }}
           DIGEST: ${{ steps.digests.outputs.digest }}
           SHA: ${{ steps.target.outputs.sha }}
@@ -374,8 +410,13 @@ jobs:
           BODY="$WORK/release.md"
           {
             printf 'Container image for OpenGym v%s, built from the upstream release and smoke-tested before publication.\n\n' "$VERSION"
-            printf -- "- \`%s:%s\` and \`%s:latest\` on Docker Hub\n" "$IMAGE" "$REGISTRY_TAG" "$IMAGE"
-            printf -- "- \`%s:%s\` and \`:latest\`, %s\n" "$GHCR" "$REGISTRY_TAG" "$MIRROR"
+            if [ "$PUSH_LATEST" = "true" ]; then
+              printf -- "- \`%s:%s\` and \`%s:latest\` on Docker Hub\n" "$IMAGE" "$REGISTRY_TAG" "$IMAGE"
+              printf -- "- \`%s:%s\` and \`:latest\`, %s\n" "$GHCR" "$REGISTRY_TAG" "$MIRROR"
+            else
+              printf -- "- \`%s:%s\` on Docker Hub (\`latest\` untouched: an older build was re-published)\n" "$IMAGE" "$REGISTRY_TAG"
+              printf -- "- \`%s:%s\`, %s (\`latest\` untouched)\n" "$GHCR" "$REGISTRY_TAG" "$MIRROR"
+            fi
             printf -- "- digest: \`%s\`\n" "${DIGEST:-unknown}"
             printf -- "- tag commit: %s\n" "$SHA"
             printf -- "- build run: %s/%s/actions/runs/%s\n\n" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$BUILD_RUN"
