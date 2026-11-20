@@ -82,30 +82,14 @@ ARG S6_OVERLAY_SHA256=e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8
 ARG S6_SYMLINKS_ARCH_SHA256=6251226709efc0c88800a8c140404d93b391e1b4051ef50fa0e8aac1fdcf738c
 ARG S6_SYMLINKS_NOARCH_SHA256=a215675c375aca9efecde3065df22b19fb8dcdc1362566931c6b5e778099a0fb
 
-LABEL org.opencontainers.image.authors="0x1917 (https://github.com/0x1917)"                             \
-      org.opencontainers.image.title="opengym"                                                          \
-      org.opencontainers.image.description="Open-source workout & body-weight tracker."                 \
-      org.opencontainers.image.source="https://github.com/0x1917/opengym"                               \
-      org.opencontainers.image.url="https://opengym.ch"                                                 \
-      org.opencontainers.image.documentation="https://github.com/0x1917/opengym/blob/master/README.md"  \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"                                             \
-      org.opencontainers.image.version="${OPENGYM_VERSION}"                                             \
-      org.opencontainers.image.revision="${VCS_REF}"                                                    \
-      org.opencontainers.image.created="${BUILD_DATE}"                                                  \
-      org.opencontainers.image.base.name="${OPENGYM_API_REPO}"                                          \
-      org.opencontainers.image.base.digest="${BASE_DIGEST}"                                             \
-      io.opengym.upstream.version="${UPSTREAM_VERSION}"                                                 \
-      io.opengym.upstream.api="${OPENGYM_API_IMAGE}"                                                    \
-      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"                                                    \
-      io.opengym.upstream.mcp="${OPENGYM_MCP_IMAGE}"
-
 # No `apk upgrade` so two builds of the same pinned tag don't produce different bytes.
 #
 # nginx: serves the SPA and proxies /api (alpine package, master runs unprivileged).
-# gettext: envsubst renders the nginx site config at boot from upstream's template.
+# gettext-envsubst: envsubst renders the nginx site config at boot from upstream's
+# template. Not the full gettext, whose libxml2 dependency only adds CVEs.
 # tzdata: the TZ knob must actually work — without zoneinfo, TZ is ignored by libc
 # and the API's log timestamps and scheduled nudges drift to UTC.
-RUN apk add --no-cache nginx gettext tzdata \
+RUN apk add --no-cache nginx gettext-envsubst tzdata \
  && rm -f /etc/nginx/http.d/default.conf
 
 # s6-overlay: pid 1 and process supervisor. The overlay ships as a noarch tarball
@@ -260,3 +244,22 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # signal path. Upstream's own CMD (node server.js) is replaced either way.
 ENTRYPOINT ["/init"]
 CMD ["s6-pause"]
+
+LABEL org.opencontainers.image.authors="0x1917 (https://github.com/0x1917)"                                              \
+      org.opencontainers.image.title="opengym"                                                                           \
+      org.opencontainers.image.description="Open-source workout & body-weight tracker."                                  \
+      org.opencontainers.image.source="https://github.com/0x1917/opengym"                                                \
+      org.opencontainers.image.url="https://opengym.ch"                                                                  \
+      org.opencontainers.image.documentation="https://github.com/0x1917/opengym/blob/master/README.md"                   \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"                                                              \
+      org.opencontainers.image.version="${OPENGYM_VERSION}"                                                              \
+      org.opencontainers.image.revision="${VCS_REF}"                                                                     \
+      org.opencontainers.image.created="${BUILD_DATE}"                                                                   \
+      org.opencontainers.image.base.name="${OPENGYM_API_REPO}"                                                           \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}"                                                              \
+      io.opengym.upstream.version="${UPSTREAM_VERSION}"                                                                  \
+      io.opengym.upstream.api="${OPENGYM_API_IMAGE}"                                                                     \
+      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"                                                                     \
+      io.opengym.upstream.mcp="${OPENGYM_MCP_IMAGE}"                                                                     \
+      net.unraid.docker.icon="https://raw.githubusercontent.com/0x1917/unraid-templates/master/assets/opengym/icon.png"  \
+      net.unraid.docker.webui="http://[IP]:[PORT:80]/"

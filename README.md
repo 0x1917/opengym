@@ -21,7 +21,7 @@ release named by `ARG UPSTREAM_VERSION`, and adds the supervision layer:
 s6-overlay, uid-99 ownership, an unprivileged nginx master, and the boot-time
 config rendering they need.
 
-- A build is layer copies, one `apk add` (nginx,gettext, tzdata) and the 
+- A build is layer copies, one `apk add` (nginx, gettext-envsubst, tzdata) and the 
   sha256-verified s6-overlay tarballs.
 - The upstream **web** image supplies the built SPA, the nginx site template,
   the `BASE_PATH` guard, the exercise media, and the CSP string.
