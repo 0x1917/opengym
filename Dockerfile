@@ -78,10 +78,11 @@ ARG S6_SYMLINKS_NOARCH_SHA256=a215675c375aca9efecde3065df22b19fb8dcdc1362566931c
 # No `apk upgrade` so two builds of the same pinned tag don't produce different bytes.
 #
 # nginx: serves the SPA and proxies /api (alpine package, master runs unprivileged).
-# gettext: envsubst renders the nginx site config at boot from upstream's template.
+# gettext-envsubst: envsubst renders the nginx site config at boot from upstream's
+# template. Not the full gettext, whose libxml2 dependency only adds CVEs.
 # tzdata: the TZ knob must actually work — without zoneinfo, TZ is ignored by libc
 # and the API's log timestamps and scheduled nudges drift to UTC.
-RUN apk add --no-cache nginx gettext tzdata \
+RUN apk add --no-cache nginx gettext-envsubst tzdata \
  && rm -f /etc/nginx/http.d/default.conf
 
 # s6-overlay: pid 1 and process supervisor. The overlay ships as a noarch tarball
