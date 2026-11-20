@@ -33,12 +33,13 @@ free_port() {
 PORT=$(free_port)
 ORIGIN="http://127.0.0.1:$PORT"
 
-start() {  # $1 = BASE_PATH
+start() {  # $1 = BASE_PATH, then any extra `docker run` arguments
   local prefix=${1:-}
+  shift || true
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" -p "127.0.0.1:$PORT:80" -v "$DATA":/data \
     -e ORIGIN="$ORIGIN" -e RP_ID=127.0.0.1 -e BASE_PATH="$prefix" \
-    -e PASSWORD_LOGIN=true -e FIRST_USER_ADMIN=true "$IMAGE" >/dev/null
+    -e PASSWORD_LOGIN=true -e FIRST_USER_ADMIN=true "$@" "$IMAGE" >/dev/null
   for _ in $(seq 1 45); do
     curl -fsS -o /dev/null "$ORIGIN$prefix/api/health" 2>/dev/null && return 0
     [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = true ] \
@@ -101,6 +102,16 @@ pass "licence texts ship in the image (AGPL + third-party notice)"
 req GET /api/config | grep -q '"password_login":true' || die "password_login flag"
 pass "PASSWORD_LOGIN reaches the config endpoint"
 
+# MCP over HTTPS is opt-in: without MCP=true nothing listens behind /mcp and
+# nginx answers upstream's JSON 503, which an MCP client can show.
+OFF=$(curl -sS -w '\n%{http_code}' -X POST "$ORIGIN/mcp")
+[ "${OFF##*$'\n'}" = 503 ] || die "/mcp without MCP=true answered ${OFF##*$'\n'}, not 503"
+printf '%s' "${OFF%$'\n'*}" | jq -e '.error.code == -32000' >/dev/null || die "/mcp 503 is not upstream's JSON-RPC error"
+pass "/mcp answers JSON 503 while MCP is off"
+
+docker exec "$NAME" /usr/libexec/opengym/healthcheck.sh || die "healthcheck fails with MCP off"
+pass "healthcheck passes with MCP off (the idle mcp service is not probed)"
+
 # --- account, admin, data ---------------------------------------------------
 PW=$(openssl rand -hex 16)
 UID_=$(req POST /api/register/password "{\"name\":\"ci-smoke\",\"password\":\"$PW\"}" | jq -r '.user.id')
@@ -130,6 +141,70 @@ req GET /gym/api/data | jq -e '.state.settings.smoke == "marker"' >/dev/null \
   || die "data lost across container replacement"
 [ "$(curl -fsS -o /dev/null -w '%{http_code}' "$ORIGIN/gym/")" = 200 ] || die "SPA under BASE_PATH"
 pass "replacement keeps session + data; BASE_PATH=/gym serves"
+
+# --- MCP over HTTPS (MCP=true) ----------------------------------------------
+start "" -e MCP=true
+# The api answering does not mean the mcp server is up yet.
+for _ in $(seq 1 20); do
+  docker exec "$NAME" wget -qO- http://127.0.0.1:3100/mcp/health 2>/dev/null | grep -q '"ok":true' && break
+  sleep 1
+done
+docker exec "$NAME" wget -qO- http://127.0.0.1:3100/mcp/health | grep -q '"ok":true' \
+  || die "mcp server did not come up with MCP=true"
+
+MCP_USER=$(docker exec "$NAME" ps -o user,args | awk '/src\/http\.js/ && !/awk/ { print $1; exit }')
+[ "$MCP_USER" = mcp ] || die "mcp server runs as '${MCP_USER:-nothing}', not mcp"
+if docker exec -u mcp "$NAME" cat /data/secret >/dev/null 2>&1; then
+  die "the mcp account can read /data/secret"
+fi
+pass "mcp server runs as its own account and cannot read /data"
+
+# With MCP on, a dead mcp server must make the container unhealthy, and a
+# restarted one healthy again. s6-svc stops it without the crash policy, so the
+# rest of the container stays up meanwhile.
+mcp_up() { docker exec "$NAME" wget -qO- http://127.0.0.1:3100/mcp/health 2>/dev/null | grep -q '"ok":true'; }
+docker exec "$NAME" /usr/libexec/opengym/healthcheck.sh || die "healthcheck fails with MCP on and running"
+docker exec "$NAME" s6-svc -wd -T 10000 -d /run/service/mcp || die "could not stop the mcp service"
+if docker exec "$NAME" /usr/libexec/opengym/healthcheck.sh; then
+  die "healthcheck passes while the mcp server is down"
+fi
+docker exec "$NAME" s6-svc -u /run/service/mcp || die "could not restart the mcp service"
+for _ in $(seq 1 20); do mcp_up && break; sleep 1; done
+docker exec "$NAME" /usr/libexec/opengym/healthcheck.sh || die "healthcheck still fails after the mcp server came back"
+pass "healthcheck follows the mcp server while MCP is on"
+
+mcp_rpc() {  # token json [curl args...] -> body; the transport needs both Accept types
+  local token=$1 body=$2
+  shift 2
+  curl -sS -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+       -H "Authorization: Bearer $token" -d "$body" "$@" "$ORIGIN/mcp"
+}
+HDRS=$(curl -sS -o /dev/null -D - -H 'Content-Type: application/json' \
+       -H 'Accept: application/json, text/event-stream' \
+       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$ORIGIN/mcp")
+printf '%s' "$HDRS" | grep -q '^HTTP/[0-9.]* 401' || die "/mcp without a token is not 401"
+printf '%s' "$HDRS" | grep -qi '^www-authenticate:.*resource_metadata=' \
+  || die "/mcp 401 carries no OAuth resource_metadata challenge"
+curl -fsS "$ORIGIN/.well-known/oauth-protected-resource/mcp" \
+  | jq -e --arg r "$ORIGIN/mcp" '.resource == $r' >/dev/null || die "OAuth protected resource metadata"
+pass "/mcp challenges with OAuth and the discovery document names it"
+
+MADE=$(req POST /api/tokens '{"name":"ci-smoke","scopes":{"workouts":"apply","plans":"view"}}') \
+  || die "token creation"
+TOKEN=$(printf '%s' "$MADE" | jq -r .token)
+TOKEN_ID=$(printf '%s' "$MADE" | jq -r .id)
+mcp_rpc "$TOKEN" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | jq -e '[.result.tools[].name] | index("log_workout") and (index("create_routine") | not)' >/dev/null \
+  || die "tools/list does not match the token's scopes"
+mcp_rpc "$TOKEN" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_workouts","arguments":{}}}' \
+  | jq -e '(.result.isError | not) and (.result.content[0].text | fromjson | has("workouts"))' >/dev/null \
+  || die "list_workouts through the mcp server"
+pass "scoped token: tools follow its scopes and read the profile through the api"
+
+req POST /api/tokens/revoke "{\"id\":\"$TOKEN_ID\"}" >/dev/null || die "token revoke"
+REVOKED=$(mcp_rpc "$TOKEN" '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' -o /dev/null -w '%{http_code}')
+[ "$REVOKED" = 401 ] || die "revoked token answered $REVOKED, not 401"
+pass "a revoked token is refused at once"
 
 # --- bad config is refused at boot ----------------------------------------
 set +e

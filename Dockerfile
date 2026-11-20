@@ -17,14 +17,16 @@
 # is the same bare release; only the git tag carries the `v`.
 ARG UPSTREAM_VERSION=1.4.5
 
-# The two images this build starts from. One repository constant each and both
+# The three images this build starts from. One repository constant each and all
 # refs derive from UPSTREAM_VERSION on top of it: moving the release, or the
-# owner, is one edit and the pair cannot drift apart. `--build-arg` can still
-# override either ref for a one-off build of a specific digest.
+# owner, is one edit and the set cannot drift apart. `--build-arg` can still
+# override any ref for a one-off build of a specific digest.
 ARG OPENGYM_API_REPO=ghcr.io/duartesantos8/opengym-api
 ARG OPENGYM_WEB_REPO=ghcr.io/duartesantos8/opengym-web
+ARG OPENGYM_MCP_REPO=ghcr.io/duartesantos8/opengym-mcp
 ARG OPENGYM_API_IMAGE=${OPENGYM_API_REPO}:${UPSTREAM_VERSION}
 ARG OPENGYM_WEB_IMAGE=${OPENGYM_WEB_REPO}:${UPSTREAM_VERSION}
+ARG OPENGYM_MCP_IMAGE=${OPENGYM_MCP_REPO}:${UPSTREAM_VERSION}
 
 # -- WEB --------------------------------------------------------------------
 # Two things come out of upstream's web image: the built SPA (the exercise
@@ -36,6 +38,14 @@ ARG OPENGYM_WEB_IMAGE=${OPENGYM_WEB_REPO}:${UPSTREAM_VERSION}
 # by hand.
 FROM ${OPENGYM_WEB_IMAGE} AS web
 RUN printf '%s\n' "$CONTENT_SECURITY_POLICY" > /tmp/opengym-csp
+
+# -- MCP --------------------------------------------------------------------
+# Upstream's MCP over HTTPS server (docs/MCP_REMOTE.md upstream), which upstream
+# ships as an optional fourth container. Only its /app tree comes out: mcp/ plus
+# the api/ and frontend/ modules it imports by relative path, so the three are
+# copied together and keep that layout. Pure JavaScript with no native modules,
+# so it runs on the api image's node.
+FROM ${OPENGYM_MCP_IMAGE} AS mcp
 
 # -- IMAGE ------------------------------------------------------------------
 # Upstream's API image: node runtime plus the app at /app (server.js, the root
@@ -52,6 +62,7 @@ ARG OPENGYM_VERSION=${UPSTREAM_VERSION}
 ARG OPENGYM_API_REPO
 ARG OPENGYM_API_IMAGE
 ARG OPENGYM_WEB_IMAGE
+ARG OPENGYM_MCP_IMAGE
 # Set at build time to stamp the OCI labels below: --build-arg VCS_REF=$(git rev-parse HEAD)
 # BUILD_DATE=$(git log -1 --format=%cI) (this repo's commit date — deterministic per source
 # state). BASE_DIGEST is the manifest digest of the api image ref, resolved by the workflow
@@ -85,7 +96,8 @@ LABEL org.opencontainers.image.authors="0x1917 (https://github.com/0x1917)"     
       org.opencontainers.image.base.digest="${BASE_DIGEST}"                                             \
       io.opengym.upstream.version="${UPSTREAM_VERSION}"                                                 \
       io.opengym.upstream.api="${OPENGYM_API_IMAGE}"                                                    \
-      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"
+      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"                                                    \
+      io.opengym.upstream.mcp="${OPENGYM_MCP_IMAGE}"
 
 # No `apk upgrade` so two builds of the same pinned tag don't produce different bytes.
 #
@@ -115,7 +127,7 @@ RUN echo "${S6_NOARCH_SHA256}  /tmp/s6-overlay-noarch.tar.xz" | sha256sum -c -  
  && tar -C / -Jxpf /tmp/s6-overlay-symlinks-noarch.tar.xz                                        \
  && rm -f /tmp/s6-overlay-*.tar.xz
 
-# Service accounts. Both processes run unprivileged; s6 itself is root as pid 1 and
+# Service accounts. Every process runs unprivileged; s6 itself is root as pid 1 and
 # drops privileges per service via s6-setuidgid.
 #
 # opengym: uid 99, gid users(100) — Unraid's conventional nobody:users ownership for
@@ -123,9 +135,18 @@ RUN echo "${S6_NOARCH_SHA256}  /tmp/s6-overlay-noarch.tar.xz" | sha256sum -c -  
 # nginx: the account the alpine nginx package creates; keeping it distinct from
 # opengym means a compromised web tier cannot read /data (users, passkeys, session
 # secret). Only the api account touches /data.
+# mcp: the MCP server, the one service that takes requests straight from AI
+# assistants. Its own group too, never users, so it has the same distance from
+# /data as nginx and reaches data only through the api with a scoped token.
 RUN addgroup -g 100 users 2>/dev/null || true              \
  && adduser -D -H -u 99 -G users -s /sbin/nologin opengym  \
- && getent passwd nginx >/dev/null
+ && getent passwd nginx >/dev/null                         \
+ && addgroup -S mcp                                        \
+ && adduser -S -D -H -G mcp -s /sbin/nologin mcp
+
+# The MCP server's tree at upstream's relative layout (see the MCP stage above).
+# Root-owned and read-only to the mcp account: the code is not its to change.
+COPY --from=mcp /app/ /opt/opengym-mcp/
 
 # The built SPA and the exercise media, both already at their final paths inside
 # upstream's web image (media under exercise-media/): nothing is downloaded at
@@ -158,31 +179,39 @@ RUN install -D -m 644 /tmp/opengym-runtime/nginx.conf         /etc/nginx/nginx.c
  && install -D -m 755 /tmp/opengym-runtime/s6-api-finish     /etc/s6-overlay/s6-rc.d/api/finish      \
  && install -D -m 755 /tmp/opengym-runtime/s6-nginx-run      /etc/s6-overlay/s6-rc.d/nginx/run       \
  && install -D -m 755 /tmp/opengym-runtime/s6-nginx-finish   /etc/s6-overlay/s6-rc.d/nginx/finish    \
+ && install -D -m 755 /tmp/opengym-runtime/s6-mcp-run        /etc/s6-overlay/s6-rc.d/mcp/run         \
+ && install -D -m 755 /tmp/opengym-runtime/s6-mcp-finish     /etc/s6-overlay/s6-rc.d/mcp/finish      \
  && install -D -m 755 /tmp/opengym-runtime/s6-init-config-up /etc/s6-overlay/s6-rc.d/init-config/up  \
  && install -D -m 755 /tmp/opengym-runtime/init-config.sh    /usr/libexec/opengym/init-config.sh     \
  && install -D -m 755 /tmp/opengym-runtime/finish-policy.sh  /usr/libexec/opengym/finish-policy.sh   \
+ && install -D -m 755 /tmp/opengym-runtime/healthcheck.sh    /usr/libexec/opengym/healthcheck.sh     \
  && rm -rf /tmp/opengym-runtime                                                                      \
  && chmod 755 /usr/libexec/opengym/05-check-base-path.sh                                             \
  && printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/api/type                                            \
  && printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/nginx/type                                          \
+ && printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/mcp/type                                            \
  && printf 'oneshot\n' > /etc/s6-overlay/s6-rc.d/init-config/type                                    \
  && install -d /etc/s6-overlay/s6-rc.d/api/dependencies.d                                            \
               /etc/s6-overlay/s6-rc.d/nginx/dependencies.d                                           \
+              /etc/s6-overlay/s6-rc.d/mcp/dependencies.d                                             \
               /etc/s6-overlay/user-bundles.d/user/contents.d                                         \
  && touch /etc/s6-overlay/s6-rc.d/api/dependencies.d/init-config                                     \
           /etc/s6-overlay/s6-rc.d/nginx/dependencies.d/init-config                                   \
+          /etc/s6-overlay/s6-rc.d/mcp/dependencies.d/init-config                                     \
           /etc/s6-overlay/user-bundles.d/user/contents.d/api                                         \
-          /etc/s6-overlay/user-bundles.d/user/contents.d/nginx
+          /etc/s6-overlay/user-bundles.d/user/contents.d/nginx                                       \
+          /etc/s6-overlay/user-bundles.d/user/contents.d/mcp
 
 # PORT: the api's listen port, read by both services (upstream's web template proxies
 # to http://${BACKEND}:${PORT}, and the api listens on it). BACKEND is 127.0.0.1
 # because the api lives in this same container, so no DNS name needs re-resolving.
 # RESOLVER: kept configurable for parity with upstream's template (the /api blocks
 # carry a `resolver` directive); on Docker the embedded DNS answers.
-# MCP_BACKEND/MCP_PORT: upstream's template (v1.4.5+) proxies /mcp to an optional
-# separate MCP container. None runs in this image, so the default points at an
-# unused local port and /mcp answers upstream's JSON 503; aim them at a real MCP
-# container to enable it.
+# MCP_BACKEND/MCP_PORT: where upstream's template proxies /mcp. The bundled mcp
+# service listens on 127.0.0.1:${MCP_PORT}, but only with MCP=true (deliberately
+# not defaulted here: like upstream, MCP over HTTPS is opt-in); otherwise nothing
+# listens and /mcp answers upstream's JSON 503. Aim them elsewhere only to use an
+# external MCP container instead.
 # PASSWORD_LOGIN and FIRST_USER_ADMIN are deliberately NOT defaulted here: both
 # are template rows (default true), so the choice belongs to the deployer's
 # config, not the image. A plain `docker run` without them gets upstream's off.
@@ -215,11 +244,11 @@ ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
 WORKDIR /app
 EXPOSE 80
 
-# Probes through nginx into the api: healthy only if the SPA server answers AND the
-# /api proxy chain reaches node. ${NGINX_PORT} is expanded by the shell at probe
-# time, so it tracks the configured port.
+# Probes through nginx into the api, and the bundled MCP server while MCP is on
+# (healthcheck.sh). The ports are read from the environment at probe time, so
+# they track the configured values.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget --spider -q "http://127.0.0.1:${NGINX_PORT}/api/health" || exit 1
+    CMD ["/usr/libexec/opengym/healthcheck.sh"]
 
 # s6-overlay as pid 1, with s6-pause as the CMD: the container's work is entirely
 # its supervised services, and s6-overlay keeps the container alive exactly as long

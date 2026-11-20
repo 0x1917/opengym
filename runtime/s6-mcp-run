@@ -1,0 +1,19 @@
+#!/bin/sh
+# Upstream's MCP over HTTPS server (opengym-mcp), copied from its image to
+# /opt/opengym-mcp with its tree intact: the code imports shared modules from
+# ../../api and ../../frontend, so the three directories travel together.
+#
+# Optional, like upstream's compose profile: unless MCP is on, the service idles
+# and nginx answers /mcp with upstream's JSON 503. It holds no data and no
+# secret. It runs as its own account, never opengym, and reaches the api only
+# over loopback with the caller's scoped token.
+#
+# The idle is `sleep infinity`, never s6-pause: finish-policy.sh finds the CMD by
+# `pidof s6-pause`, and a second one would be mistaken for it on a crash loop.
+case "$(printf '%s' "${MCP:-}" | tr 'A-Z' 'a-z')" in
+  1|true|yes|on) ;;
+  *) exec s6-setuidgid mcp sleep infinity ;;
+esac
+cd /opt/opengym-mcp/mcp || exit 1
+export OPENGYM_API_URL="${OPENGYM_API_URL:-http://127.0.0.1:${PORT}}"
+exec s6-setuidgid mcp node src/http.js

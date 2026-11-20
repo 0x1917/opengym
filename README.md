@@ -9,8 +9,8 @@
 [![License](https://img.shields.io/github/license/0x1917/opengym)](https://github.com/0x1917/opengym/blob/master/LICENSE)
 
 Single-container build of [OpenGym](https://github.com/DuarteSantos8/openGym):
-Node API, nginx-served SPA, and exercise media in one image, supervised by
-s6-overlay. Built for Unraid - install it with the OpenGym template from
+Node API, nginx-served SPA, exercise media, and the optional MCP server in one
+image, supervised by s6-overlay. Built for Unraid - install it with the OpenGym template from
 [`0x1917/unraid-templates`](https://github.com/0x1917/unraid-templates).
 
 ## Run
@@ -31,8 +31,8 @@ loopback API, so the app stays on a single origin (a passkey requirement).
 ## How the image is built
 
 Nothing is compiled here. The Dockerfile starts from upstream's published images
-(`ghcr.io/duartesantos8/opengym-api` and `opengym-web`), both at the release named
-by `ARG UPSTREAM_VERSION`, and adds the supervision layer:
+(`ghcr.io/duartesantos8/opengym-api`, `opengym-web` and `opengym-mcp`), all at the
+release named by `ARG UPSTREAM_VERSION`, and adds the supervision layer:
 s6-overlay, uid-99 ownership, an unprivileged nginx master, and the boot-time
 config rendering they need.
 
@@ -40,6 +40,9 @@ config rendering they need.
   sha256-verified s6-overlay tarballs.
 - The upstream **web** image supplies the built SPA, the nginx site template,
   the `BASE_PATH` guard, the exercise media, and the CSP string.
+- The upstream **mcp** image supplies the MCP over HTTPS server: its whole
+  `/app` tree, copied to `/opt/opengym-mcp`, because the server imports shared
+  modules from upstream's `api/` and `frontend/` by relative path.
 
 ### Build
 
@@ -91,6 +94,13 @@ bash scripts/smoke-test.sh opengym:test
 | `/data` owned `99:100`                             | the Unraid appdata ownership contract                           |
 | `docker stop` exits 0                              | no orphaned nginx, no swallowed signal                          |
 | replacement keeps session + data, `BASE_PATH=/gym` | an upgrade does not lose data, and subpath mode serves          |
+| `/mcp` answers JSON 503 while MCP is off           | MCP stays opt-in, and clients get upstream's readable error     |
+| healthcheck passes with MCP off                    | the idle mcp service never marks the container unhealthy        |
+| mcp runs as its own account, cannot read `/data`   | the AI-facing service is kept away from the data, like nginx    |
+| healthcheck follows the mcp server while MCP is on | a dead MCP server shows as unhealthy, a restarted one recovers  |
+| `/mcp` OAuth challenge and discovery document      | Claude and ChatGPT connectors can start their sign-in           |
+| scoped token: tools follow scopes, reads the api   | the full MCP path, from nginx through the mcp server to the api |
+| a revoked token is refused at once                 | revocation reaches the MCP path without a restart               |
 | invalid `BASE_PATH` refused at boot                | misconfiguration fails loudly instead of 404-ing                |
 
 Deliberate gaps: passkey ceremonies (needs a real browser), Coach provider jobs,
@@ -252,7 +262,7 @@ Defaults are what this image (or, marked †, the Unraid template) sets. A plain
 | `INVITE_ONLY`      | `false`      | Gate sign-ups behind admin-generated invite codes. Create an admin profile first.                                                             |
 | `SESSION_DAYS`     | `90`         | Sign-in lifetime in days. Affects new sign-ins only.                                                                                          |
 | `SESSION_SAMESITE` | *(lax)*      | `strict` never sends the session cookie on cross-site requests.                                                                               |
-| `DEFAULT_LANG`     | *(empty)*    | Starting language for the sign-in screen and profiles that never chose one (`de`, `pt-BR`, ...; codes as in Settings > Language).            |
+| `DEFAULT_LANG`     | *(empty)*    | Starting language for the sign-in screen and profiles that never chose one (`de`, `pt-BR`, ...; codes as in Settings > Language).             |
 
 ### Single sign-on (OIDC)
 
@@ -278,48 +288,48 @@ Authelia, Keycloak, Pocket ID, voidAuth, ...).
 
 ### Proxy and networking
 
-| Variable           | Default     | Meaning                                                                                                                       |
-| ------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Variable           | Default     | Meaning                                                                                                                         |
+| ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `TRUST_PROXY`      | `true` †    | Honor `X-Forwarded-For`/`X-Real-IP`. Safe here: nginx in this image overwrites both with the real peer (upstream default: off). |
-| `CF_CONNECTING_IP` | *(empty)*   | `$http_cf_connecting_ip`, only when Cloudflare is really in front; empty drops the header so a client cannot forge it.        |
-| `BASE_PATH`        | *(empty)*   | Subpath deployments (`/gym`, no trailing slash) where the proxy passes the prefix through. Empty means site root.             |
-| `NGINX_PORT`       | `80`        | nginx's listen port inside the container. Change the published port instead unless you have a reason.                        |
-| `TZ`               | `Etc/UTC`   | Container timezone for logs and the audit log. Reminders fire in each user's own zone regardless.                             |
+| `CF_CONNECTING_IP` | *(empty)*   | `$http_cf_connecting_ip`, only when Cloudflare is really in front; empty drops the header so a client cannot forge it.          |
+| `BASE_PATH`        | *(empty)*   | Subpath deployments (`/gym`, no trailing slash) where the proxy passes the prefix through. Empty means site root.               |
+| `NGINX_PORT`       | `80`        | nginx's listen port inside the container. Change the published port instead unless you have a reason.                           |
+| `TZ`               | `Etc/UTC`   | Container timezone for logs and the audit log. Reminders fire in each user's own zone regardless.                               |
 
 ### Media uploads
 
 Photos, GIFs, videos and sounds attached to custom exercises, stored under
 `/data/uploads`. Sizes are MB (1024×1024 bytes).
 
-| Variable                 | Default   | Meaning                                                                                                               |
-| ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| Variable                 | Default   | Meaning                                                                                                                             |
+| ------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `MEDIA_UPLOAD_MAX`       | `112m`    | nginx's body limit (`client_max_body_size`). Keep it above `MEDIA_VIDEO_MAX_MB`, and give any reverse proxy in front the same room. |
-| `MEDIA_UPLOADS`          | `true`    | `false` turns uploads off; the app then offers a link field only.                                                     |
-| `MEDIA_QUOTA_MB`         | `200`     | Space per profile (`0` = no cap). On open sign-up, the worst case is this times the number of profiles.               |
-| `MEDIA_VIDEO_MAX_MB`     | `100`     | Per-video cap. Larger clips are shrunk on the device first where the browser can.                                     |
-| `MEDIA_VIDEO_MAX_SEC`    | `60`      | Per-video length cap.                                                                                                 |
-| `MEDIA_IMAGE_MAX_MB`     | `2`       | Per-photo cap (photos are shrunk to 1600 px on the device).                                                           |
-| `MEDIA_GIF_MAX_MB`       | `8`       | Per-GIF cap.                                                                                                          |
-| `MEDIA_AUDIO_MAX_MB`     | `2`       | Per rest-timer sound cap.                                                                                             |
-| `MEDIA_MIN_FREE_MB`      | `512`     | Uploads are refused below this much free disk, so a full disk cannot take the instance down.                          |
+| `MEDIA_UPLOADS`          | `true`    | `false` turns uploads off; the app then offers a link field only.                                                                   |
+| `MEDIA_QUOTA_MB`         | `200`     | Space per profile (`0` = no cap). On open sign-up, the worst case is this times the number of profiles.                             |
+| `MEDIA_VIDEO_MAX_MB`     | `100`     | Per-video cap. Larger clips are shrunk on the device first where the browser can.                                                   |
+| `MEDIA_VIDEO_MAX_SEC`    | `60`      | Per-video length cap.                                                                                                               |
+| `MEDIA_IMAGE_MAX_MB`     | `2`       | Per-photo cap (photos are shrunk to 1600 px on the device).                                                                         |
+| `MEDIA_GIF_MAX_MB`       | `8`       | Per-GIF cap.                                                                                                                        |
+| `MEDIA_AUDIO_MAX_MB`     | `2`       | Per rest-timer sound cap.                                                                                                           |
+| `MEDIA_MIN_FREE_MB`      | `512`     | Uploads are refused below this much free disk, so a full disk cannot take the instance down.                                        |
 
 ### Optional features
 
 All off unless noted.
 
-| Variable                 | Default   | Meaning                                                                                                                          |
-| ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `TRAINERS`               | `false`   | Gyms, gym leads and trainers; members choose per category what a trainer may see or change. See upstream `docs/TRAINERS.md`.     |
-| `TRAINERS_LEAD_ACCESS`   | `row`     | What a gym lead gets: `row`, `mirror` or `none`.                                                                                 |
-| `LIBRARY`                | `false`   | Community library: share exercises, plans, sounds and more with everyone on this server, moderated from the admin dashboard.     |
-| `SHARE_REVIEW`           | `false`   | An admin approves every new library item first.                                                                                  |
-| `SHARE_PERSONAL_MEDIA`   | `false`   | Allow workout and progress photos in the library (always reviewed).                                                              |
-| `ADMIN_DATA_VIEW`        | `false`   | Admin dashboard shows people's workouts and weigh-ins again (counts only since 1.4.5), with every look logged.                   |
-| `API_TOKENS`             | `true`    | Per-profile scoped API tokens (Settings > API tokens). `false` removes the feature.                                              |
+| Variable                 | Default   | Meaning                                                                                                                                 |
+| ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRAINERS`               | `false`   | Gyms, gym leads and trainers; members choose per category what a trainer may see or change. See upstream `docs/TRAINERS.md`.            |
+| `TRAINERS_LEAD_ACCESS`   | `row`     | What a gym lead gets: `row`, `mirror` or `none`.                                                                                        |
+| `LIBRARY`                | `false`   | Community library: share exercises, plans, sounds and more with everyone on this server, moderated from the admin dashboard.            |
+| `SHARE_REVIEW`           | `false`   | An admin approves every new library item first.                                                                                         |
+| `SHARE_PERSONAL_MEDIA`   | `false`   | Allow workout and progress photos in the library (always reviewed).                                                                     |
+| `ADMIN_DATA_VIEW`        | `false`   | Admin dashboard shows people's workouts and weigh-ins again (counts only since 1.4.5), with every look logged.                          |
+| `API_TOKENS`             | `true`    | Per-profile scoped API tokens (Settings > API tokens). `false` removes the feature.                                                     |
 | `INTEGRATIONS`           | *(empty)* | Comma-separated: `webhook` (signed JSON to Home Assistant, n8n, ntfy, ...), `strava` (needs `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET`). |
-| `INTEGRATIONS_ALLOW_LAN` | `false`   | Let webhooks reach private addresses. Every signed-in user can then make the server call into your network.                      |
-| `NUTRITION_SOURCE`       | *(empty)* | `opennutrition`, with `NUTRITION_URL`, fills the trainer "nutrition" category.                                                   |
-| `VAPID_SUBJECT`          | `ORIGIN`  | Contact for push services, e.g. `mailto:you@example.com`. Push works without it.                                                 |
+| `INTEGRATIONS_ALLOW_LAN` | `false`   | Let webhooks reach private addresses. Every signed-in user can then make the server call into your network.                             |
+| `NUTRITION_SOURCE`       | *(empty)* | `opennutrition`, with `NUTRITION_URL`, fills the trainer "nutrition" category.                                                          |
+| `VAPID_SUBJECT`          | `ORIGIN`  | Contact for push services, e.g. `mailto:you@example.com`. Push works without it.                                                        |
 
 ### Activity log and AI Coach
 
@@ -332,12 +342,32 @@ All off unless noted.
 | `COACH_DISABLED`       | `false`  | Kill switch over the admin's AI Coach toggle. The Coach itself is set up in the admin dashboard, not here.               |
 | `COACH_JOB_TIMEOUT_MS` | `600000` | Longer Coach jobs, e.g. a local model on a CPU. Never below one minute.                                                  |
 
+### MCP over HTTPS
+
+Lets AI assistants (Claude, ChatGPT, Gemini, or a local client such as Claude
+Code) read and change openGym data at `<ORIGIN>/mcp`, each with a scoped API
+token. Upstream runs it as a separate container; this image bundles it as a
+third supervised service, running as its own `mcp` account with no access to
+`/data`. It only reaches data through the API, with the caller's token. See
+upstream's [`docs/MCP_REMOTE.md`](https://github.com/DuarteSantos8/openGym/blob/main/docs/MCP_REMOTE.md).
+
+| Variable              | Default     | Meaning                                                                                                                         |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP`                 | `true`      | Starts the bundled MCP server, shows its address in Settings, and makes OpenGym the OAuth sign-in for assistant connectors.     |
+| `MCP_ALLOWED_ORIGINS` | `ORIGIN`    | Browser origins allowed to call `/mcp`, comma-separated. Non-browser clients send none.                                         |
+| `MCP_PORT`            | `3100`      | Port the MCP server listens on inside the container.                                                                            |
+| `MCP_BACKEND`         | `127.0.0.1` | Where nginx sends `/mcp`. Change it only to use an external MCP container instead of the bundled one.                           |
+
+With `MCP` off, `/mcp` answers a JSON 503. Connectors such as Claude's and
+ChatGPT's call from the provider's servers, so they need `ORIGIN` to be a
+public HTTPS address with openGym at the root of its host (or a proxy that
+passes `BASE_PATH` through). A LAN-only instance still works with a token in
+the `Authorization` header from a local client.
+
 ### Not applicable to this image
 
-- `MCP` / `COMPOSE_PROFILES=mcp`: MCP over HTTPS needs upstream's separate mcp
-  container, which is not bundled. `/mcp` answers a JSON 503. To use one, run
-  it beside this container, point `MCP_BACKEND` (default `127.0.0.1`) and
-  `MCP_PORT` (`3100`) at it, and set `MCP=true`.
+- `COMPOSE_PROFILES=mcp`: the MCP server is bundled, so `MCP=true` is all it
+  takes.
 - `COACH_EFFORT`, `API_TARGET=coach`: this image is upstream's `default` API
   target, without the Claude Agent SDK or Codex runtime. API-key Coach
   providers work; the in-container ones do not.
@@ -353,17 +383,19 @@ All off unless noted.
 
 ## Design notes
 
-- **One image, two supervised processes.** Upstream's compose runs `api` and
-  `web` as separate containers; merging them removes container-to-container DNS
-  from the request path and leaves one artifact to build, back up and roll back.
+- **One image, up to three supervised processes.** Upstream's compose runs
+  `api`, `web` and the optional `mcp` as separate containers; merging them
+  removes container-to-container DNS from the request path and leaves one
+  artifact to build, back up and roll back. The mcp service idles unless
+  `MCP=true`.
 - **s6-overlay, sha256-verified at build.** pid-1 signal handling, privilege
   dropping, ordered one-shot init.
 - **Crash policy.** A crashed service restarts after 1s; five deaths in 60s end
   the CMD so Docker's restart policy owns the failure. A failed stage 2 stops the
   boot (`S6_BEHAVIOUR_IF_STAGE2_FAILS=2`).
-- **Both services unprivileged.** API as uid 99 (group `users`, Unraid's appdata
-  convention), nginx as the distro `nginx` account. Only the API can read
-  `/data`.
+- **Every service unprivileged.** API as uid 99 (group `users`, Unraid's appdata
+  convention), nginx as the distro `nginx` account, the MCP server as `mcp`.
+  Only the API can read `/data`.
 - **License texts ship in the image** at `/usr/share/opengym/`: the AGPL text
   (`LICENSE`) and upstream's third-party notice (`NOTICE.md`). The image
   redistributes upstream's build and the separately licensed exercise media, so

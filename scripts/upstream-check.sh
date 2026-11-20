@@ -39,6 +39,7 @@ registry_path() { local ref; ref=$(arg_value "$1"); printf '%s\n' "${ref#ghcr.io
 
 API_PATH=$(registry_path OPENGYM_API_REPO)
 WEB_PATH=$(registry_path OPENGYM_WEB_REPO)
+MCP_PATH=$(registry_path OPENGYM_MCP_REPO)
 
 ghcr_token() { curl -fsS "https://ghcr.io/token?scope=repository:$1:pull" | jq -r .token; }
 
@@ -60,9 +61,13 @@ newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail 
 
 # Upstream builds api and web from one tag; during a release window one image can
 # exist before the other. Never propose a version that cannot be built.
-app_buildable() {
-  local ver=$1
-  ghcr_tags "$WEB_PATH" | grep -qx "$ver"
+# The api tag is what app_latest found; the build also starts FROM the web and
+# mcp images of the same release. Prints the first one not published yet.
+app_missing() {
+  local ver=$1 path
+  for path in "$WEB_PATH" "$MCP_PATH"; do
+    ghcr_tags "$path" | grep -qx "$ver" || { printf '%s\n' "${path##*/}"; return 0; }
+  done
 }
 
 s6_latest() {
@@ -126,8 +131,10 @@ cmd_check() {
   app_new=$(app_latest)
   s6_new=$(s6_latest)
 
-  if ! app_buildable "$app_new"; then
-    reason="opengym-web:$app_new not published yet (upstream mid-release)"
+  local missing
+  missing=$(app_missing "$app_new")
+  if [ -n "$missing" ]; then
+    reason="$missing:$app_new not published yet (upstream mid-release)"
     app_new=$app_cur
   fi
   # Only a NEWER release counts. A pin ahead of upstream (a parked or yanked
