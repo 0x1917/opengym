@@ -375,14 +375,10 @@ jobs:
         if: success() && steps.meta.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
-          PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
           TAG: ${{ steps.tag.outputs.tag }}
           DIGEST: ${{ steps.digests.outputs.digest }}
           SHA: ${{ steps.target.outputs.sha }}
           BUILD_RUN: ${{ env.RUN_ID }}
-          GHCR_PUSH: ${{ steps.ghcr_push.outcome }}
-          GHCR_VERIFY: ${{ steps.ghcr_verify.outcome }}
           UPSTREAM: DuarteSantos8/openGym
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -412,27 +408,22 @@ jobs:
           fi
           [ -s "$NOTES" ] || echo "_Upstream published no notes for this version._" > "$NOTES"
 
-          MIRROR="not published in this run"
-          if [ "${GHCR_PUSH:-}" = "success" ] && [ "${GHCR_VERIFY:-}" = "success" ]; then
-            MIRROR="mirrored and digest-checked"
-          fi
+          # Pages for the two registries, derived from the image names above:
+          # GHCR's package page lives under the repository that publishes it.
+          HUB_URL="https://hub.docker.com/r/$IMAGE"
+          GHCR_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pkgs/container/${GHCR##*/}"
 
           BODY="$WORK/release.md"
           {
-            printf 'Container image for OpenGym v%s, built from the upstream release and smoke-tested before publication.\n\n' "$VERSION"
-            if [ "$PUSH_LATEST" = "true" ]; then
-              printf -- "- \`%s:%s\` and \`%s:latest\` on Docker Hub\n" "$IMAGE" "$REGISTRY_TAG" "$IMAGE"
-              printf -- "- \`%s:%s\` and \`:latest\`, %s\n" "$GHCR" "$REGISTRY_TAG" "$MIRROR"
-            else
-              printf -- "- \`%s:%s\` on Docker Hub (\`latest\` untouched: an older build was re-published)\n" "$IMAGE" "$REGISTRY_TAG"
-              printf -- "- \`%s:%s\`, %s (\`latest\` untouched)\n" "$GHCR" "$REGISTRY_TAG" "$MIRROR"
-            fi
-            printf -- "- digest: \`%s\`\n" "${DIGEST:-unknown}"
-            printf -- "- tag commit: %s\n" "$SHA"
-            printf -- "- build run: %s/%s/actions/runs/%s\n\n" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$BUILD_RUN"
+            printf 'Container image for OpenGym v%s, built from the upstream release at [%s](https://github.com/%s/releases/tag/v%s). Published to [Docker Hub](%s), with a best-effort mirror on [GHCR](%s).\n\n' \
+              "$VERSION" "$UPSTREAM" "$UPSTREAM" "$VERSION" "$HUB_URL" "$GHCR_URL"
+            printf '| Digest | Tag commit | Build run |\n| --- | --- | --- |\n'
+            printf "| \`%s\` | %s | [%s](%s/%s/actions/runs/%s) |\n\n" \
+              "${DIGEST:-unknown}" "$SHA" "$BUILD_RUN" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$BUILD_RUN"
+            printf 'The changelog below is from the upstream [OpenGym v%s](https://github.com/%s/releases/tag/v%s) release, quoted as published.\n\n' "$VERSION" "$UPSTREAM" "$VERSION"
+            printf -- '---\n\n'
             printf '## What changed in v%s\n\n' "$VERSION"
             cat "$NOTES"
-            printf '\n---\nChangelog from [OpenGym v%s](https://github.com/%s/releases/tag/v%s), quoted as published.\n' "$VERSION" "$UPSTREAM" "$VERSION"
           } > "$BODY"
 
           # One release per core version, always pointing at the HIGHEST source
