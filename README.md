@@ -13,21 +13,6 @@ Node API, nginx-served SPA, exercise media, and the optional MCP server in one
 image, supervised by s6-overlay. Built for Unraid - install it with the OpenGym template from
 [`0x1917/unraid-templates`](https://github.com/0x1917/unraid-templates).
 
-## Run
-
-Prebuilt on Docker Hub: `docker pull 0x1917/opengym:latest`.
-
-```sh
-docker run -d --name opengym --restart unless-stopped   \
-  -p 8310:80                                            \
-  -e ORIGIN=http://{IP}}:8310                           \
-  -v /mnt/user/appdata/opengym:/data                    \
-  0x1917/opengym:latest
-```
-
-Only port 80 is published. nginx fronts everything and proxies `/api` to the
-loopback API, so the app stays on a single origin (a passkey requirement).
-
 ## How the image is built
 
 Nothing is compiled here. The Dockerfile starts from upstream's published images
@@ -40,7 +25,7 @@ config rendering they need.
   sha256-verified s6-overlay tarballs.
 - The upstream **web** image supplies the built SPA, the nginx site template,
   the `BASE_PATH` guard, the exercise media, and the CSP string.
-- The upstream **mcp** image supplies the MCP over HTTPS server: its whole
+- The upstream **MCP** image supplies the MCP over HTTPS server: its whole
   `/app` tree, copied to `/opt/opengym-mcp`, because the server imports shared
   modules from upstream's `api/` and `frontend/` by relative path.
 
@@ -49,7 +34,7 @@ config rendering they need.
 The build context is this directory, so run it from the repository root.
 
 ```sh
-docker build -t opengym:dev .
+docker build -t opengym:latest .
 ```
 
 The image carries three provenance labels: `image.revision` (default=`dev`), 
@@ -59,7 +44,7 @@ The CI chain fills them from the commit and from the pinned base image.
 #### Test a different upstream release without editing the file
 
 ```sh
-docker build -t opengym:dev                                              \
+docker build -t opengym:beta                                             \
   --build-arg OPENGYM_API_IMAGE=ghcr.io/duartesantos8/opengym-api:<ver>  \
   --build-arg OPENGYM_WEB_IMAGE=ghcr.io/duartesantos8/opengym-web:<ver>  \
   .
@@ -68,6 +53,23 @@ docker build -t opengym:dev                                              \
 `<ver>` is an upstream release tag. Override **both** refs together: nothing 
 in the Dockerfile cross-checks that the API and web tags come from the same release.
 For a real update, edit the ARG instead (see Version management).
+
+## Run
+
+Prebuilt on Docker Hub: `docker pull 0x1917/opengym:latest`.
+
+```sh
+docker run -d                         \
+  --name opengym                      \
+  --restart unless-stopped            \
+  -p 8310:80                          \
+  -e ORIGIN=http://{IP}}:8310         \
+  -v /mnt/user/appdata/opengym:/data  \
+  0x1917/opengym:latest
+```
+
+Only port 80 is published. nginx fronts everything and proxies `/api` to the
+loopback API, so the app stays on a single origin (a passkey requirement).
 
 ## Test
 
