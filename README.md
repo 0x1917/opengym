@@ -124,7 +124,8 @@ bundle says so. It then:
 2. Runs `smoke-test.sh` again on the loaded bytes, because they travelled
    through an artifact store
 3. Tags and pushes its registry tag (`<ver>` on the first publish, `<ver>-<n>`
-   on a rebuild) plus `latest`, verifies both digests match
+   on a rebuild), plus `latest` when it carries the highest tag of the series,
+   and verifies the pushed digests match
 4. Creates the git source tag (`v<ver>`, or `-<n>` for a rebuild)
 5. Creates the GitHub release, whose notes quote upstream's changelog section
    for that version word for word, and state the digest that shipped

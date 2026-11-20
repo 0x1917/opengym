@@ -176,6 +176,14 @@ jobs:
           set -euo pipefail
           BASE="v${VERSION}"
           TAG=$(git tag --points-at HEAD | bash scripts/version-tag.sh "$VERSION")
+          # A tag on this commit is only this run's when its note names this
+          # build run. A new build of an already-published commit (a forced
+          # dispatch) has different bytes, so it is a rebuild and gets its own
+          # number rather than overwriting that tag on the registry.
+          if [ -n "$TAG" ] && ! git tag -l --format='%(contents)' "$TAG" | grep -Fq "build run $RUN_ID)"; then
+            echo "$TAG on this commit came from another build run, numbering a rebuild"
+            TAG=""
+          fi
           if [ -n "$TAG" ]; then
             NOTE="Source state published as $IMAGE:${TAG#v} (build run $RUN_ID)"
           elif git ls-remote --exit-code --tags origin "refs/tags/$BASE" >/dev/null 2>&1; then
@@ -192,12 +200,14 @@ jobs:
           fi
           # `latest` moves only when this run carries the highest tag of the
           # whole series. Peeled `^{}` lines and non-version tags cannot match
-          # the pattern; if nothing matches, default to pushing (first publish).
-          HIGHEST_ALL=$(git ls-remote --tags origin \
-            | awk '{sub(/^refs\/tags\//,"",$2); print $2}' \
+          # the pattern. A new tag is not on the remote until the tag step
+          # below, so it joins the candidates here: otherwise a first publish
+          # or a fresh rebuild would never be the highest and latest would
+          # never move.
+          HIGHEST_ALL=$({ git ls-remote --tags origin \
+                            | awk '{sub(/^refs\/tags\//,"",$2); print $2}'; echo "$TAG"; } \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' \
             | sort -V | tail -1 || true)
-          [ -n "$HIGHEST_ALL" ] || HIGHEST_ALL="$TAG"
           if [ "$TAG" = "$HIGHEST_ALL" ]; then
             PUSH_LATEST=true
           else
@@ -434,6 +444,14 @@ jobs:
           HIGHEST=$(git ls-remote --tags origin | awk '{sub(/^refs\/tags\//,"",$2); print $2}' \
             | bash scripts/version-tag.sh "$VERSION")
           [ -n "$HIGHEST" ] || HIGHEST="$TAG"
+          # The notes above describe THIS run's build (its digest, commit and
+          # registry tag), so they may only land on the release when this run
+          # is the newest publish. A re-publish of an older build leaves the
+          # release, and the notes describing the newest build, alone.
+          if [ "$TAG" != "$HIGHEST" ]; then
+            echo "re-published $TAG, older than $HIGHEST: the release stays as it is"
+            exit 0
+          fi
           # The list is capped, so a release beyond the cap is looked up directly
           # instead of falling through to a create that would 422 on the tag.
           if [ -z "$EXISTING" ] && gh release view "$HIGHEST" >/dev/null 2>&1; then
