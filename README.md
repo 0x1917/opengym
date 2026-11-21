@@ -13,6 +13,8 @@ Node API, nginx-served SPA, exercise media, and the optional MCP server in one
 image, supervised by s6-overlay. Built for Unraid - install it with the OpenGym template from
 [`0x1917/unraid-templates`](https://github.com/0x1917/unraid-templates).
 
+OpenGym is a self-hosted workout and body-weight tracker: plan routines, log workouts (supersets, warm-ups, cardio), see which muscles are trained, and import from Strong, Hevy or FitNotes. Sign in with passkeys, a password, or your own OIDC provider.
+
 ## How the image is built
 
 Nothing is compiled here. The Dockerfile starts from upstream's published images
