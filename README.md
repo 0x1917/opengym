@@ -201,10 +201,10 @@ exists it updates the ARGs, re-vendors `NOTICE.md`, builds, runs the smoke gate,
 and only then opens a PR. Nothing publishes until that PR is merged.
 
 - The PR is opened with a token from the `0x1917-bot` GitHub App when the repository
-  has the `APP_ID` variable and the `APP_PRIVATE_KEY` secret, so `build` and `lint` run on
-  it as the ruleset requires. Without the app it falls back to `GITHUB_TOKEN`, whose PRs
-  start no other workflow runs; the build and smoke evidence is then the check run's log
-  and the PR body.
+  has the `CLIENT_ID` variable (the app's Client ID) and the `APP_PRIVATE_KEY` secret,
+  so `build` and `lint` run on it as the ruleset requires. Without the app it falls back
+  to `GITHUB_TOKEN`, whose PRs start no other workflow runs; the build and smoke evidence
+  is then the check run's log and the PR body.
 - The branch name carries the date and both versions, so a re-run on the same day
   is a no-op while the PR is open. Close it unmerged and the next run proposes it
   again.
