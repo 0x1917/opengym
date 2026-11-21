@@ -8,6 +8,11 @@
 #
 # Nothing here can build. The bytes come from the artifact or they do not ship.
 #
+# The scripts this workflow runs (the smoke test, scripts/version-tag.sh) come
+# from the default branch, never from the build run's commit: this job holds a
+# write token, so it executes only code already on master. The build run's
+# commit is used as data alone, as the target of the source tag.
+#
 # The release body quotes upstream's changelog for the version. Upstream keeps
 # each CHANGELOG.md section identical to that release's GitHub notes, so the
 # text says what changed in the app rather than what changed in this packaging.
@@ -124,6 +129,7 @@ jobs:
             echo "version=$(jq -r .version "$BUNDLE/meta.json")"
             echo "image_id=$(jq -r .image_id "$BUNDLE/meta.json")"
             echo "publish=$(jq -r .publish "$BUNDLE/meta.json")"
+            echo "forced=$(jq -r '.forced // false' "$BUNDLE/meta.json")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Nothing to publish
@@ -132,16 +138,49 @@ jobs:
 
       # Only needed when there is something to push: the smoke script and the
       # tag step both live in the repo. Placed after the manifest read so a
-      # non-publish build costs one API call and a 381-byte download.
+      # non-publish build costs one API call and a 381-byte download. The
+      # default branch, not the build run's commit (see the header); fetch-depth
+      # 0 brings the target commit and the remote's tags along.
       - uses: actions/checkout@v7
         if: steps.meta.outputs.publish == 'true'
         with:
-          ref: ${{ steps.target.outputs.sha }}
-          fetch-depth: 0   # the tag step reads the remote's tags
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Load the tested image
+      - name: Confirm the target commit is on master
         if: steps.meta.outputs.publish == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$SHA" HEAD \
+            || { echo "build run commit $SHA is not on master (force-pushed away?), refusing to tag it" >&2; exit 1; }
+
+      # Re-checked here, not only in build: build decides before an earlier publish
+      # has created its tag, so two pushes in quick succession both compare against
+      # the old baseline and the second republishes an unchanged image as <ver>-<n>.
+      # Publish runs are serialised, so by now the highest tag is current. A forced
+      # build (a base image rebuild) skips the check.
+      - name: Confirm the image changed since the last release
+        id: recheck
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          FORCED: ${{ steps.meta.outputs.forced }}
+        run: |
+          set -euo pipefail
+          LAST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' | sort -V | tail -1 || true)
+          INPUTS=()
+          while IFS= read -r p; do INPUTS+=("$p"); done < <(grep -vE '^[[:space:]]*(#|$)' .github/build-inputs)
+          if [ "$FORCED" = true ] || [ -z "$LAST" ] || ! git diff --quiet "$LAST" "$SHA" -- "${INPUTS[@]}"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no build input changed between $LAST and $SHA (another publish got there first), so nothing to publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load the tested image
+        if: steps.recheck.outputs.publish == 'true'
         run: |
           set -euo pipefail
           BUNDLE="$RUNNER_TEMP/bundle"
@@ -156,7 +195,7 @@ jobs:
       # The bytes travelled through an artifact store, so the gate runs again on
       # what actually arrived rather than trusting the build run's log.
       - name: Run the smoke test on the loaded image
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         run: bash scripts/smoke-test.sh opengym:test
 
       # The registry tag mirrors the git source tag, computed here from read-only
@@ -169,13 +208,14 @@ jobs:
       # other run can take a number between this step and the tag step below.
       - name: Resolve the publish tag
         id: pubtag
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           BASE="v${VERSION}"
-          TAG=$(git tag --points-at HEAD | bash scripts/version-tag.sh "$VERSION")
+          TAG=$(git tag --points-at "$SHA" | bash scripts/version-tag.sh "$VERSION")
           # A tag on this commit is only this run's when its note names this
           # build run. A new build of an already-published commit (a forced
           # dispatch) has different bytes, so it is a rebuild and gets its own
@@ -222,7 +262,7 @@ jobs:
           echo "publish tag: $TAG (registry tag: ${TAG#v}, push_latest=$PUSH_LATEST)"
 
       - name: Log in to Docker Hub
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         uses: docker/login-action@v4
         with:
           username: "0x1917"
@@ -232,7 +272,7 @@ jobs:
       # its own numbered tag and leaves the earlier one alone. `latest` moves
       # only when Resolve the publish tag set push_latest=true.
       - name: Tag and push the image
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
           PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
@@ -248,7 +288,7 @@ jobs:
 
       - name: Verify the pushed digest
         id: digests
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
           PUSH_LATEST: ${{ steps.pubtag.outputs.push_latest }}
@@ -270,10 +310,11 @@ jobs:
       # it already carries one.
       - name: Create the source tag
         id: tag
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         env:
           TAG: ${{ steps.pubtag.outputs.tag }}
           NOTE: ${{ steps.pubtag.outputs.note }}
+          SHA: ${{ steps.target.outputs.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -282,14 +323,14 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           # The tag name and note were resolved read-only before any push
           # (Resolve the publish tag); this step only creates and pushes it.
-          if git tag --points-at HEAD | grep -Fxq "$TAG"; then
+          if git tag --points-at "$SHA" | grep -Fxq "$TAG"; then
             echo "this commit already carries $TAG, nothing to tag"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$NOTE"
+          git tag -a "$TAG" -m "$NOTE" "$SHA"
           git push origin "refs/tags/$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -300,7 +341,7 @@ jobs:
       # warning annotation instead of a red run.
       - name: Log in to GHCR
         id: ghcr_login
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         uses: docker/login-action@v4
         with:
@@ -310,7 +351,7 @@ jobs:
 
       - name: Push the GHCR copy
         id: ghcr_push
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
@@ -332,7 +373,7 @@ jobs:
       # image. The `latest` pair is compared only when this run moved it.
       - name: Verify the GHCR tags
         id: ghcr_verify
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         env:
           REGISTRY_TAG: ${{ steps.pubtag.outputs.registry_tag }}
@@ -353,7 +394,7 @@ jobs:
           fi
 
       - name: GHCR outcome
-        if: always() && steps.meta.outputs.publish == 'true'
+        if: always() && steps.recheck.outputs.publish == 'true'
         env:
           LOGIN: ${{ steps.ghcr_login.outcome }}
           PUSH: ${{ steps.ghcr_push.outcome }}
@@ -372,7 +413,7 @@ jobs:
       # says each release section is the GitHub release notes word for word, so
       # the section for this version is quoted verbatim.
       - name: Create or update the GitHub release
-        if: success() && steps.meta.outputs.publish == 'true'
+        if: success() && steps.recheck.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           TAG: ${{ steps.tag.outputs.tag }}

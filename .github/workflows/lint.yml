@@ -1,6 +1,7 @@
 # Static checks that need no image: workflow schema (actionlint, which also
 # lints the shell inside `run:` blocks), the shell scripts that ship inside the
-# container (shellcheck), and the crash policy's own test.
+# container (shellcheck), the crash policy's own test, and the build-inputs
+# coverage check.
 #
 # One job, one check context (`lint`), three independent verdicts: each check
 # runs to completion even when another fails and the final step reports all of
@@ -56,6 +57,13 @@ jobs:
         continue-on-error: true
         run: bash scripts/test-runtime.sh
 
+      # build.yml publishes only when a path in .github/build-inputs changed, so
+      # a COPY source outside that list would change the image unpublished.
+      - name: build inputs cover the Dockerfile
+        id: inputs
+        continue-on-error: true
+        run: bash scripts/check-build-inputs.sh
+
       # Every check has already run by now. Fail the job (and the `lint` check)
       # if any objected and say which.
       - name: Verdict
@@ -64,13 +72,16 @@ jobs:
           ACTIONLINT: ${{ steps.actionlint.outcome }}
           SHELLCHECK: ${{ steps.shellcheck.outcome }}
           POLICY: ${{ steps.policy.outcome }}
+          INPUTS: ${{ steps.inputs.outcome }}
         run: |
           set -uo pipefail
           echo "actionlint: $ACTIONLINT"
           echo "shellcheck: $SHELLCHECK"
           echo "policy:     $POLICY"
+          echo "inputs:     $INPUTS"
           rc=0
           [ "$ACTIONLINT" = "success" ] || { echo "::error::actionlint failed"; rc=1; }
           [ "$SHELLCHECK" = "success" ] || { echo "::error::shellcheck failed"; rc=1; }
           [ "$POLICY" = "success" ] || { echo "::error::finish-policy test failed"; rc=1; }
+          [ "$INPUTS" = "success" ] || { echo "::error::the Dockerfile copies a path .github/build-inputs does not list"; rc=1; }
           exit "$rc"

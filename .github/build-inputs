@@ -1,0 +1,7 @@
+# Paths that reach the image. build.yml publishes only when one of these changed
+# since the last release tag; lint fails if the Dockerfile copies from anywhere else.
+Dockerfile
+.dockerignore
+runtime
+LICENSE
+NOTICE.md

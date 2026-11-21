@@ -123,14 +123,19 @@ version, and the publish decision.
 
 | Event                                                         | Build | Publish |
 | ------------------------------------------------------------- | ----- | ------- |
-| push to `master` touching a build input                       | yes   | yes     |
-| push to `master` touching only the workflows                  | yes   | no      |
+| push to `master` changing a build input since the last tag    | yes   | yes     |
+| push to `master` changing nothing that reaches the image      | yes   | no      |
 | pull request                                                  | yes   | no      |
 | dispatch, `force_publish=false`                               | yes   | no      |
 | dispatch, `force_publish=true`                                | yes   | yes     |
 
 Publish runs only from `master`, only after a green build, and only when the
-bundle says so. It then:
+bundle says so. It checks out `master`, never the build run's commit, so the job
+holding a write token runs only code already on `master`; the build run's commit is
+the target of the source tag. Before pushing it repeats the build-input comparison
+against the highest tag: build decides before an earlier publish has tagged, so two
+quick pushes would otherwise both publish, the second as a `<ver>-<n>` rebuild of an
+unchanged image. Publish runs are serialised, so that tag is current. It then:
 
 1. Loads the tarball and asserts the image ID matches the one in `meta.json`
 2. Runs `smoke-test.sh` again on the loaded bytes, because they travelled
@@ -170,9 +175,11 @@ What matters:
 - **The published image is the tested image.** The artifact carries the exact
   image ID the gate ran against and the publish side refuses to proceed if the
   ID it loads differs.
-- **Publishing is gated on the image inputs.** Everything in this repo
-  counts as a build input except the CI scripts, the assets, and this README, so a new file
-  defaults to publishing rather than silently skipping.
+- **Publishing is gated on the image inputs.** Only the paths that reach the image
+  count, listed in [`.github/build-inputs`](.github/build-inputs): `Dockerfile`,
+  `.dockerignore`, `runtime/`, `LICENSE` and `NOTICE.md`. The baseline is the highest
+  published tag. Lint fails if the Dockerfile copies from any other path, so a new
+  `COPY` source cannot change the image without publishing it.
 - `timeout-minutes: 25` on the build, 20 on the publish.
 - Serialized runs: `build-<ref>` for builds, `publish` for publishes,
   both with `cancel-in-progress: false`, so `:latest` and the numbered tag series
@@ -191,9 +198,11 @@ only `curl` and `jq` and therefore also runs by hand. When something newer
 exists it updates the ARGs, re-vendors `NOTICE.md`, builds, runs the smoke gate,
 and only then opens a PR. Nothing publishes until that PR is merged.
 
-- A PR opened with the built-in `GITHUB_TOKEN` starts no other workflow runs, so
-  the `opengym` build workflow does not appear on it. Build and smoke evidence lives in the
-  check run's log and the PR body.
+- The PR is opened with a token from the `0x1917-bot` GitHub App when the repository
+  has the `APP_ID` variable and the `APP_PRIVATE_KEY` secret, so `build` and `lint` run on
+  it as the ruleset requires. Without the app it falls back to `GITHUB_TOKEN`, whose PRs
+  start no other workflow runs; the build and smoke evidence is then the check run's log
+  and the PR body.
 - The branch name carries the date and both versions, so a re-run on the same day
   is a no-op while the PR is open. Close it unmerged and the next run proposes it
   again.
