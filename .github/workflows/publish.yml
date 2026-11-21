@@ -160,19 +160,21 @@ jobs:
       # has created its tag, so two pushes in quick succession both compare against
       # the old baseline and the second republishes an unchanged image as <ver>-r<n>.
       # Publish runs are serialised, so by now the highest tag is current. A forced
-      # build (a base image rebuild) skips the check.
+      # build (a base image rebuild) and a manual re-publish of a named build run
+      # skip the check: both are explicit requests to push.
       - name: Confirm the image changed since the last release
         id: recheck
         if: steps.meta.outputs.publish == 'true'
         env:
           SHA: ${{ steps.target.outputs.sha }}
           FORCED: ${{ steps.meta.outputs.forced }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           LAST=$(git tag -l 'v*' | bash scripts/version-tag.sh --max)
           INPUTS=()
           while IFS= read -r p; do INPUTS+=("$p"); done < <(grep -vE '^[[:space:]]*(#|$)' .github/build-inputs)
-          if [ "$FORCED" = true ] || [ -z "$LAST" ] || ! git diff --quiet "$LAST" "$SHA" -- "${INPUTS[@]}"; then
+          if [ "$FORCED" = true ] || [ "$EVENT" = workflow_dispatch ] || [ -z "$LAST" ] || ! git diff --quiet "$LAST" "$SHA" -- "${INPUTS[@]}"; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "no build input changed between $LAST and $SHA (another publish got there first), so nothing to publish"
