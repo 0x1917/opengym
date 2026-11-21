@@ -158,7 +158,7 @@ jobs:
 
       # Re-checked here, not only in build: build decides before an earlier publish
       # has created its tag, so two pushes in quick succession both compare against
-      # the old baseline and the second republishes an unchanged image as <ver>-<n>.
+      # the old baseline and the second republishes an unchanged image as <ver>-r<n>.
       # Publish runs are serialised, so by now the highest tag is current. A forced
       # build (a base image rebuild) skips the check.
       - name: Confirm the image changed since the last release
@@ -169,7 +169,7 @@ jobs:
           FORCED: ${{ steps.meta.outputs.forced }}
         run: |
           set -euo pipefail
-          LAST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' | sort -V | tail -1 || true)
+          LAST=$(git tag -l 'v*' | bash scripts/version-tag.sh --max)
           INPUTS=()
           while IFS= read -r p; do INPUTS+=("$p"); done < <(grep -vE '^[[:space:]]*(#|$)' .github/build-inputs)
           if [ "$FORCED" = true ] || [ -z "$LAST" ] || ! git diff --quiet "$LAST" "$SHA" -- "${INPUTS[@]}"; then
@@ -201,7 +201,7 @@ jobs:
       # The registry tag mirrors the git source tag, computed here from read-only
       # git state BEFORE anything is pushed: the first publish of a release keeps
       # the bare core version on the registry (1.4.4) for good, a rebuild gets
-      # its own numbered tag (1.4.4-1) instead of overwriting it. `latest` moves
+      # its own numbered tag (1.4.4-r1) instead of overwriting it. `latest` moves
       # only when this run carries the highest tag of the whole series (gate
       # below), so a re-publish of an older build never drags it backwards.
       # Publish runs are serialised by this workflow's concurrency group, so no
@@ -227,12 +227,14 @@ jobs:
           if [ -n "$TAG" ]; then
             NOTE="Source state published as $IMAGE:${TAG#v} (build run $RUN_ID)"
           elif git ls-remote --exit-code --tags origin "refs/tags/$BASE" >/dev/null 2>&1; then
-            # The bare tag is taken: this is a rebuild. Number it.
+            # The bare tag is taken: this is a rebuild. Number it -r<n>, after the
+            # highest rebuild so far, in either form (tags before the switch to
+            # -r<n> were <ver>-<n>).
             N=$(git ls-remote --tags origin | awk -v p="refs/tags/${BASE}-" \
-                  'index($2, p) == 1 { n = substr($2, length(p) + 1); if (n ~ /^[0-9]+$/) print n }' \
+                  'index($2, p) == 1 { n = substr($2, length(p) + 1); sub(/^r/, "", n); if (n ~ /^[0-9]+$/) print n }' \
                   | sort -n | tail -1)
             N=${N:-0}
-            TAG="${BASE}-$((N + 1))"
+            TAG="${BASE}-r$((N + 1))"
             NOTE="Rebuild #$((N + 1)) of $IMAGE:$VERSION (release tag already exists, build run $RUN_ID)"
           else
             TAG="$BASE"
@@ -246,8 +248,7 @@ jobs:
           # never move.
           HIGHEST_ALL=$({ git ls-remote --tags origin \
                             | awk '{sub(/^refs\/tags\//,"",$2); print $2}'; echo "$TAG"; } \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' \
-            | sort -V | tail -1 || true)
+            | bash scripts/version-tag.sh --max)
           if [ "$TAG" = "$HIGHEST_ALL" ]; then
             PUSH_LATEST=true
           else
@@ -305,7 +306,7 @@ jobs:
           echo "digest=$v" >> "$GITHUB_OUTPUT"
 
       # The FIRST publish of a release gets the bare tag (v1.4.3); a rebuild of
-      # the same release gets the next number (v1.4.3-1, -2), so every publish
+      # the same release gets the next number (v1.4.3-r1, -r2), so every publish
       # leaves a tag and none is ever moved. Re-running the same commit is a no-op:
       # it already carries one.
       - name: Create the source tag

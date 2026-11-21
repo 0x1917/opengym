@@ -134,23 +134,23 @@ bundle says so. It checks out `master`, never the build run's commit, so the job
 holding a write token runs only code already on `master`; the build run's commit is
 the target of the source tag. Before pushing it repeats the build-input comparison
 against the highest tag: build decides before an earlier publish has tagged, so two
-quick pushes would otherwise both publish, the second as a `<ver>-<n>` rebuild of an
+quick pushes would otherwise both publish, the second as a `<ver>-r<n>` rebuild of an
 unchanged image. Publish runs are serialised, so that tag is current. It then:
 
 1. Loads the tarball and asserts the image ID matches the one in `meta.json`
 2. Runs `smoke-test.sh` again on the loaded bytes, because they travelled
    through an artifact store
-3. Tags and pushes its registry tag (`<ver>` on the first publish, `<ver>-<n>`
+3. Tags and pushes its registry tag (`<ver>` on the first publish, `<ver>-r<n>`
    on a rebuild), plus `latest` when it carries the highest tag of the series,
    and verifies the pushed digests match
-4. Creates the git source tag (`v<ver>`, or `-<n>` for a rebuild)
+4. Creates the git source tag (`v<ver>`, or `-r<n>` for a rebuild)
 5. Creates the GitHub release, whose notes quote upstream's changelog section
    for that version word for word, and state the digest that shipped
 
 A rebuild moves that release onto the numbered source tag rather than opening a
 second release, so each version keeps one release whose tag names the bytes it
 was last cut from. On the registry the rebuild is a new tag of its own
-(`<ver>-<n>`): the first-published `<ver>` tag is never overwritten, and
+(`<ver>-r<n>`): the first-published `<ver>` tag is never overwritten, and
 `latest` moves only when the run carries the highest tag of the series, so a
 re-publish of an older build refreshes just its own tag.
 
@@ -214,12 +214,12 @@ it, so one edit cannot leave the pair mismatched.
 
 `<ver>` below is an upstream release tag such as `1.0.1`. The published version is whatever the ARG says.
 
-| Thing                                 | Form                                            | Example                |
-| ------------------------------------- | ----------------------------------------------- | ---------------------- |
-| upstream image tag                    | bare semver (upstream's own convention)         | `opengym-api:<ver>`    |
-| this repo's Hub tag                   | bare semver first publish, `<ver>-<n>` rebuilds | `0x1917/opengym:<ver>` |
-| OCI `image.version` label             | bare semver                                     | `<ver>`                |
-| git tag (CI)                          | `v` + version; rebuilds get `-<n>`              | `v<ver>`               |
+| Thing                     | Form                                             | Example                |
+| ------------------------- | ------------------------------------------------ | ---------------------- |
+| upstream image tag        | bare semver (upstream's own convention)          | `opengym-api:<ver>`    |
+| this repo's Hub tag       | bare semver first publish, `<ver>-r<n>` rebuilds | `0x1917/opengym:<ver>` |
+| OCI `image.version` label | bare semver                                      | `<ver>`                |
+| git tag (CI)              | `v` + version; rebuilds get `-r<n>`              | `v<ver>`               |
 
 ### Update checklist
 
@@ -235,14 +235,16 @@ The daily check does steps 1 to 4 and opens a PR, merging that PR is step 5. By 
 
 - **Version tags are immutable after the first publish.** The first publish of
   a release claims `<ver>` on both registries; every rebuild pushes its own
-  `<ver>-<n>` tag. `latest` moves only when the run carries the highest tag of
+  `<ver>-r<n>` tag. `latest` moves only when the run carries the highest tag of
   the whole series, so re-publishing an older build never drags it backwards.
   The git side records the same series
-  (`v<ver>`, then `v<ver>-<n>`), and the release for that core version is
+  (`v<ver>`, then `v<ver>-r<n>`), and the release for that core version is
   retargeted to the newest source tag. Inside the registry, `image.created` and
   `image.revision` still separate two builds of one release.
 - **Rollback** is a previous release tag (`0x1917/opengym:<ver>`, or a rebuild's
-  `<ver>-<n>`) or a local image. Old tags are not deleted.
+  `<ver>-r<n>`) or a local image. Old tags are not deleted. Rebuilds published before
+  the switch to `-r<n>` kept the bare `-<n>` form (`1.4.5-1`); they still count in the
+  series, and the next rebuild of that release continues the numbering (`1.4.5-r2`).
 - **The media is not AGPL.** Upstream's notice permits a non-commercial OpenGym
   fork to carry the unmodified 180px media with the notice, which is why
   `NOTICE.md` ships inside the image and is re-vendored on every release update.

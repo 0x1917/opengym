@@ -147,15 +147,24 @@ tag() { printf '%s\n' "$@" | bash "$here/scripts/version-tag.sh" "${TAG_VERSION:
 
 got=$(tag v1.4.4)
 chk "$([ "$got" = "v1.4.4" ] && echo ok || echo bad)" "the bare tag matches itself" "got '$got'"
-got=$(tag v1.4.4 v1.4.4-1 v1.4.4-2)
-chk "$([ "$got" = "v1.4.4-2" ] && echo ok || echo bad)" "the highest rebuild wins" "got '$got'"
-got=$(tag v1.4.4 v1.4.4-2 v1.4.4-10)
-chk "$([ "$got" = "v1.4.4-10" ] && echo ok || echo bad)" "rebuild numbers sort numerically, not as text" "got '$got'"
-got=$(tag v1.4.40 v1.4.4-beta v1.5.0 v1.4.4x)
+got=$(tag v1.4.4 v1.4.4-r1 v1.4.4-r2)
+chk "$([ "$got" = "v1.4.4-r2" ] && echo ok || echo bad)" "the highest rebuild wins" "got '$got'"
+got=$(tag v1.4.4 v1.4.4-r2 v1.4.4-r10)
+chk "$([ "$got" = "v1.4.4-r10" ] && echo ok || echo bad)" "rebuild numbers sort numerically, not as text" "got '$got'"
+# Tags published before the switch to -r<n> keep their place in the series.
+got=$(tag v1.4.4 v1.4.4-1)
+chk "$([ "$got" = "v1.4.4-1" ] && echo ok || echo bad)" "a legacy -<n> rebuild still counts" "got '$got'"
+got=$(tag v1.4.4-1 v1.4.4-r2)
+chk "$([ "$got" = "v1.4.4-r2" ] && echo ok || echo bad)" "legacy and -r rebuilds compare by number" "got '$got'"
+got=$(printf '%s\n' v1.4.4 v1.4.5-1 v1.4.10 v1.4.9-r3 | bash "$here/scripts/version-tag.sh" --max)
+chk "$([ "$got" = "v1.4.10" ] && echo ok || echo bad)" "--max picks the highest tag of the series" "got '$got'"
+got=$(printf '%s\n' v1.4.5 v1.4.5-1 v1.4.5-r2 | bash "$here/scripts/version-tag.sh" --max)
+chk "$([ "$got" = "v1.4.5-r2" ] && echo ok || echo bad)" "--max orders rebuilds of the newest release" "got '$got'"
+got=$(tag v1.4.40 v1.4.4-beta v1.5.0 v1.4.4x v1.4.4-r v1.4.4-rx v1.4.4-r-1)
 chk "$([ -z "$got" ] && echo ok || echo bad)" "lookalikes are rejected" "got '$got'"
 # The prefix is gone from the scheme; a tag still carrying it must not match, or a
 # leftover from the monorepo era would be counted as this repo's build history.
-got=$(tag opengym-v1.4.4 opengym-v1.4.4-1)
+got=$(tag opengym-v1.4.4 opengym-v1.4.4-r1)
 chk "$([ -z "$got" ] && echo ok || echo bad)" "the retired opengym- prefix no longer matches" "got '$got'"
 got=$(printf '' | bash "$here/scripts/version-tag.sh" 1.4.4; echo "rc=$?")
 chk "$([ "$got" = "rc=0" ] && echo ok || echo bad)" "empty input exits 0" "got '$got'"

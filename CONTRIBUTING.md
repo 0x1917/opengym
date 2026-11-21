@@ -58,7 +58,7 @@ Each exists because the alternative was a bug:
 - **Every context `COPY` source exists and is not in `.dockerignore`.** A missing source fails
   late in the build; an ignored one fails with a confusing "not found" after a cache hit.
 - **Every `${VAR}` expanded in the `Dockerfile` is declared** with `ARG` or `ENV`.
-- **Git tags are `v<version>`**, with `v<version>-<n>` for a rebuild. The `opengym-` prefix is
+- **Git tags are `v<version>`**, with `v<version>-r<n>` for a rebuild (older rebuilds used `-<n>` and still count). The `opengym-` prefix is
   gone: this repo builds one image, so a prefix buys nothing.
 
 ## Changing the image
@@ -78,7 +78,7 @@ Each exists because the alternative was a bug:
 Do not bump `UPSTREAM_VERSION`, create a git tag, or edit the publish workflow's release logic
 in a pull request; the maintainer cuts releases. The scheme, for reference: image tags are
 bare versions (`1.4.4`, `latest`), the git source tag is `v1.4.4`, and republishing the same
-upstream release appends a rebuild number (`v1.4.4-1`). Only the newest image tag is supported.
+upstream release appends a rebuild number (`v1.4.4-r1`). Only the newest image tag is supported.
 
 ## Pull request shape
 
