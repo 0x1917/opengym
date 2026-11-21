@@ -63,13 +63,6 @@ ARG OPENGYM_API_REPO
 ARG OPENGYM_API_IMAGE
 ARG OPENGYM_WEB_IMAGE
 ARG OPENGYM_MCP_IMAGE
-# Set at build time to stamp the OCI labels below: --build-arg VCS_REF=$(git rev-parse HEAD)
-# BUILD_DATE=$(git log -1 --format=%cI) (this repo's commit date — deterministic per source
-# state). BASE_DIGEST is the manifest digest of the api image ref, resolved by the workflow
-# (or the README recipe) with `docker buildx imagetools inspect`; left unset it reads unknown.
-ARG VCS_REF=dev
-ARG BUILD_DATE=unknown
-ARG BASE_DIGEST=unknown
 # s6-overlay v3.2.3.2. The sha256 constants below are the contents of the official
 # release .sha256 assets (see README.md); every tarball is re-verified against them
 # at build time, so a tampered or replaced download fails the build instead of
@@ -81,23 +74,6 @@ ARG S6_NOARCH_SHA256=5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2
 ARG S6_OVERLAY_SHA256=e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408
 ARG S6_SYMLINKS_ARCH_SHA256=6251226709efc0c88800a8c140404d93b391e1b4051ef50fa0e8aac1fdcf738c
 ARG S6_SYMLINKS_NOARCH_SHA256=a215675c375aca9efecde3065df22b19fb8dcdc1362566931c6b5e778099a0fb
-
-LABEL org.opencontainers.image.authors="0x1917 (https://github.com/0x1917)"                             \
-      org.opencontainers.image.title="opengym"                                                          \
-      org.opencontainers.image.description="Open-source workout & body-weight tracker."                 \
-      org.opencontainers.image.source="https://github.com/0x1917/opengym"                               \
-      org.opencontainers.image.url="https://opengym.ch"                                                 \
-      org.opencontainers.image.documentation="https://github.com/0x1917/opengym/blob/master/README.md"  \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"                                             \
-      org.opencontainers.image.version="${OPENGYM_VERSION}"                                             \
-      org.opencontainers.image.revision="${VCS_REF}"                                                    \
-      org.opencontainers.image.created="${BUILD_DATE}"                                                  \
-      org.opencontainers.image.base.name="${OPENGYM_API_REPO}"                                          \
-      org.opencontainers.image.base.digest="${BASE_DIGEST}"                                             \
-      io.opengym.upstream.version="${UPSTREAM_VERSION}"                                                 \
-      io.opengym.upstream.api="${OPENGYM_API_IMAGE}"                                                    \
-      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"                                                    \
-      io.opengym.upstream.mcp="${OPENGYM_MCP_IMAGE}"
 
 # No `apk upgrade` so two builds of the same pinned tag don't produce different bytes.
 #
@@ -260,3 +236,34 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # signal path. Upstream's own CMD (node server.js) is replaced either way.
 ENTRYPOINT ["/init"]
 CMD ["s6-pause"]
+
+# Last, so the per-build values never invalidate the cached layers above: a build
+# arg that changes invalidates every RUN after its ARG line, and VCS_REF changes on
+# every commit. The net.unraid.docker labels give the Docker tab an icon and a WebUI
+# link even for a container not created from the template (docker run, compose).
+#
+# Set at build time to stamp the OCI labels below: --build-arg VCS_REF=$(git rev-parse HEAD)
+# BUILD_DATE=$(git log -1 --format=%cI) (this repo's commit date — deterministic per source
+# state). BASE_DIGEST is the manifest digest of the api image ref, resolved by the workflow
+# (or the README recipe) with `docker buildx imagetools inspect`; left unset it reads unknown.
+ARG VCS_REF=dev
+ARG BUILD_DATE=unknown
+ARG BASE_DIGEST=unknown
+LABEL org.opencontainers.image.authors="0x1917 (https://github.com/0x1917)"                                              \
+      org.opencontainers.image.title="opengym"                                                                           \
+      org.opencontainers.image.description="Open-source workout & body-weight tracker."                                  \
+      org.opencontainers.image.source="https://github.com/0x1917/opengym"                                                \
+      org.opencontainers.image.url="https://opengym.ch"                                                                  \
+      org.opencontainers.image.documentation="https://github.com/0x1917/opengym/blob/master/README.md"                   \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"                                                              \
+      org.opencontainers.image.version="${OPENGYM_VERSION}"                                                              \
+      org.opencontainers.image.revision="${VCS_REF}"                                                                     \
+      org.opencontainers.image.created="${BUILD_DATE}"                                                                   \
+      org.opencontainers.image.base.name="${OPENGYM_API_REPO}"                                                           \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}"                                                              \
+      io.opengym.upstream.version="${UPSTREAM_VERSION}"                                                                  \
+      io.opengym.upstream.api="${OPENGYM_API_IMAGE}"                                                                     \
+      io.opengym.upstream.web="${OPENGYM_WEB_IMAGE}"                                                                     \
+      io.opengym.upstream.mcp="${OPENGYM_MCP_IMAGE}"                                                                     \
+      net.unraid.docker.icon="https://raw.githubusercontent.com/0x1917/unraid-templates/master/assets/opengym/icon.png"  \
+      net.unraid.docker.webui="http://[IP]:[PORT:80]/"
