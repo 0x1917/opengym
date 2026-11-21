@@ -1,0 +1,9 @@
+# actionlint 1.7.12's built-in metadata for actions/create-github-app-token@v3
+# predates its client-id input: it reports client-id as unknown and app-id as
+# required. The action itself takes client-id (app-id is deprecated), so these two
+# messages are ignored for scout.yml alone; drop this once actionlint knows v3.
+paths:
+  .github/workflows/scout.yml:
+    ignore:
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
