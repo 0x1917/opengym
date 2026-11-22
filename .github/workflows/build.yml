@@ -143,11 +143,10 @@ jobs:
           context: .
           load: true
           tags: opengym:test
-          cache-from: |
-            type=registry,ref=${{ env.IMAGE }}:buildcache
-            type=registry,ref=${{ env.IMAGE }}:latest
-          # This job holds no registry credentials, so the cache export goes to
-          # the Actions cache. Reading the registry cache above is anonymous.
+          # This job holds no registry credentials, so the cache lives in the
+          # Actions cache both ways. A pushed image carries no cache metadata,
+          # so :latest would be no use as a cache source either.
+          cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             VCS_REF=${{ github.sha }}
