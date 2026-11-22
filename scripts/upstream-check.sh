@@ -27,7 +27,7 @@ S6_REPO=just-containers/s6-overlay
 # curl -f, naming the URL on failure: curl's own "returned error: 403" does not say
 # which of this script's requests it was.
 fetch() {
-  local a url= rc
+  local a url='' rc
   for a in "$@"; do case "$a" in https://*) url=$a ;; esac; done
   curl -f "$@" || { rc=$?; echo "request failed (curl exit $rc): $url" >&2; return "$rc"; }
 }
