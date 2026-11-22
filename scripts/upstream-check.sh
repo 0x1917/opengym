@@ -24,6 +24,14 @@ IMAGES=$(cd "$(dirname "$0")/.." && pwd)
 DOCKERFILE="$IMAGES/Dockerfile"
 S6_REPO=just-containers/s6-overlay
 
+# curl -f, naming the URL on failure: curl's own "returned error: 403" does not say
+# which of this script's requests it was.
+fetch() {
+  local a url= rc
+  for a in "$@"; do case "$a" in https://*) url=$a ;; esac; done
+  curl -f "$@" || { rc=$?; echo "request failed (curl exit $rc): $url" >&2; return "$rc"; }
+}
+
 emit() {  # emit KEY VALUE
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"
@@ -41,12 +49,12 @@ API_PATH=$(registry_path OPENGYM_API_REPO)
 WEB_PATH=$(registry_path OPENGYM_WEB_REPO)
 MCP_PATH=$(registry_path OPENGYM_MCP_REPO)
 
-ghcr_token() { curl -fsS "https://ghcr.io/token?scope=repository:$1:pull" | jq -r .token; }
+ghcr_token() { fetch -sS "https://ghcr.io/token?scope=repository:$1:pull" | jq -r .token; }
 
 ghcr_tags() {
   local tok
   tok=$(ghcr_token "$1")
-  curl -fsS -H "Authorization: Bearer $tok" \
+  fetch -sS -H "Authorization: Bearer $tok" \
     "https://ghcr.io/v2/$1/tags/list?n=1000" | jq -r '.tags[]'
 }
 
@@ -70,14 +78,18 @@ app_missing() {
   done
 }
 
+# Authenticated when GH_TOKEN is set: anonymous API calls share a 60/hour limit per
+# runner IP with every other job on it, and GitHub answers an exhausted one with 403.
 s6_latest() {
-  curl -fsS "https://api.github.com/repos/$S6_REPO/releases/latest" \
+  local auth=()
+  [ -z "${GH_TOKEN:-}" ] || auth=(-H "Authorization: Bearer $GH_TOKEN")
+  fetch -sS ${auth[@]+"${auth[@]}"} "https://api.github.com/repos/$S6_REPO/releases/latest" \
     | jq -r .tag_name | sed 's/^v//'
 }
 
 s6_sha() {  # s6_sha <version> <asset-basename> -> sha256 hex
   local ver=$1 name=$2 sha
-  sha=$(curl -fsSL "https://github.com/$S6_REPO/releases/download/v$ver/$name.tar.xz.sha256" \
+  sha=$(fetch -sSL "https://github.com/$S6_REPO/releases/download/v$ver/$name.tar.xz.sha256" \
         | awk '{print $1}' | head -1)
   case "$sha" in
     *[!0-9a-f]*|"") echo "not a sha256 for $name at v$ver: '$sha'" >&2; return 1 ;;
@@ -91,10 +103,10 @@ cmd_apply() {
   # Fetch and validate EVERYTHING before touching the tree: a failed download
   # must leave the checkout clean, not half-updated.
   tmpnotice=$(mktemp)
-  curl -fsSL "https://raw.githubusercontent.com/DuarteSantos8/openGym/v$app/NOTICE.md" -o "$tmpnotice"
+  fetch -sSL "https://raw.githubusercontent.com/DuarteSantos8/openGym/v$app/NOTICE.md" -o "$tmpnotice"
   grep -q "Gym visual" "$tmpnotice" \
     || { echo "NOTICE.md at v$app does not carry the media terms" >&2; rm -f "$tmpnotice"; exit 1; }
-  curl -fsSL "https://raw.githubusercontent.com/DuarteSantos8/openGym/v$app/LICENSE" -o "$tmpnotice.lic"
+  fetch -sSL "https://raw.githubusercontent.com/DuarteSantos8/openGym/v$app/LICENSE" -o "$tmpnotice.lic"
   grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" "$tmpnotice.lic" \
     || { echo "upstream LICENSE at v$app is no longer AGPL-3.0 — review by hand" >&2
          rm -f "$tmpnotice" "$tmpnotice.lic"; exit 1; }
